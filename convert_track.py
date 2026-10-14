@@ -1282,9 +1282,11 @@ def main():
             print("  split '%s' across surfaces: %s"
                   % (mat, ", ".join(str(x) for x in sorted(keys, key=str))))
     if unmatched:
-        print("WARNING unmatched physical mesh names:")
-        for n, c in sorted(unmatched.items(), key=lambda x: -x[1])[:10]:
-            print("   %-30s x%d" % (n, c))
+        # One line, so build_track's end-of-run summary carries the names.
+        top = sorted(unmatched.items(), key=lambda x: -x[1])[:10]
+        print("WARNING %d physical mesh name(s) match no AC surface, driven as "
+              "plain road: %s" % (len(unmatched), ", ".join(
+                  "%s x%d" % (n, c) for n, c in top)))
 
     # Terrain definition. Rather than author one from scratch, patch rF2's own
     # file: it already defines every surface type correctly, so we only swap in

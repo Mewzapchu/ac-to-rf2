@@ -535,6 +535,10 @@ def main():
     albedo_rgb = data.get("albedo_rgb", {})
     spec_mask = data.get("spec_mask", {})
     cutout_tex = data.get("cutout_tex", {})
+    # Over-bright materials carry their darkening in a copy of the texture
+    # (bake_layers.albedo_caps); the material figures barely move rF2.
+    dim_tex = data.get("dim_tex", {})
+    dim_scale = data.get("dim_scale", {})
     alpha_ref_names = set(cutout)
     rubber_tex = data.get("rubber_tex", {})
     counts = {"two stage": 0, "bump": 0, "plain": 0}
@@ -555,7 +559,7 @@ def main():
         diffuse = row.get("baked") or row["textures"].get("txDiffuse")
         # A cut-out samples its own copy, whose mips hold its threshold, and
         # the rubber its more opaque grey one.
-        diffuse = cutout_tex.get(name, diffuse)
+        diffuse = cutout_tex.get(name) or dim_tex.get(name) or diffuse
         nm = ac_texture(row, "txNormal")
         # A normal map for the detail: AC's own if it ships one, otherwise the
         # one bake_layers derives from the grain for ground AC leaves flat.
@@ -727,7 +731,7 @@ def main():
         vegetation = (row.get("shader") in ("ksTree", "ksGrass")
                       or (name in cutout and not row.get("backdrop")
                           and "csp_ksDiffuse" in pr))
-        if native and lum and not flat and not vegetation:
+        if native and lum and not flat and not vegetation and name not in dim_scale:
             # Never brighter than the albedo ceiling held these to: AC's tone
             # mapping rolls a white wall off where rF2 clips it. Only darker,
             # where AC's own coefficients say so.

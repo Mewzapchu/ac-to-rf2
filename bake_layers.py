@@ -463,6 +463,66 @@ def is_grass_card(row):
             or "AT" in sh or sh == "ksGrass")
 
 
+# Where to aim an over-bright texture, from the 342 textures measured across
+# Joesville and Loch Drummond (albedo p25 51, median 78, p75 115). The same
+# figures the exporter used to aim Diffuse/Ambient at -- which does next to
+# nothing in rF2: it lights the texture mostly from its sky, so Wuhu Town's
+# white walls stayed white at 0.34. The texture is the lever that works (as
+# for the grass cards), so the darkening goes into a copy of it.
+# Only what lies above their band is pulled in, to its top (p75): the middle
+# of it darkened 82 of Wuhu's 94 materials and Silverstone's flags to x0.25.
+SURFACE_ALBEDO = 115.0  # upright: aimed with the brightest tenth drawn
+CUTOUT_ALBEDO = 115.0   # cut-outs: fences, tents, flags
+GROUND_ALBEDO = 115.0   # plain flat ground: its average
+
+
+def albedo_caps(drawn, lums, p90, cutouts):
+    """How much to darken each over-bright material's texture, 0.15-1.
+
+    Left alone: anything a two stage or bake composes (signed off, and the
+    base is not the final albedo), the asphalt under the rubber, decals and
+    markings, the backdrop, the rubber itself, and vegetation, which has its
+    own handling.
+    """
+    out = {}
+    for name, m in drawn.items():
+        lum = lums.get(name)
+        if not lum or m.get("two_stage") or m.get("baked") or m.get("decal") \
+                or m.get("backdrop") or m.get("under_rubber") \
+                or "groove" in m.get("ac_material", "").lower():
+            continue
+        sh = m.get("shader") or ""
+        if sh in ("ksTree", "ksGrass") or (name in cutouts
+                                            and "csp_ksDiffuse" in m.get("props", {})):
+            continue
+        flat = (float(m.get("flatness", 0.0)) > 0.5
+                and bool(m.get("track_surface")))
+        if flat:
+            cap = GROUND_ALBEDO / lum
+        elif name in cutouts:
+            cap = CUTOUT_ALBEDO / lum
+        else:
+            cap = SURFACE_ALBEDO / max(p90.get(name) or lum, lum)
+        cap = max(0.15, min(1.0, cap))
+        if cap < 0.95:
+            out[name] = round(cap * 20) / 20.0
+    return out
+
+
+def dim_copy(disk, scale, tex_dir, tmp, texconv):
+    """A copy of a diffuse texture with its colour scaled, alpha untouched."""
+    path = os.path.join(tex_dir, disk)
+    sz = dds_size(path)
+    img = to_rgba(path, tmp, sz[0], sz[1]) if sz else None
+    if img is None:
+        return None
+    alpha = img[:, :, 3] if float(img[:, :, 3].std()) > 0.01 \
+        or float(img[:, :, 3].mean()) < 0.99 else None
+    stem = os.path.splitext(disk)[0] + "_d%02d" % int(round(scale * 100))
+    return write_dds(stem, np.clip(img[:, :, :3] * scale, 0.0, 1.0), alpha,
+                     tex_dir, tmp, texconv)
+
+
 def coverage_copy(disk, ref, tex_dir, tmp, texconv, rgb_scale=1.0):
     """A cut-out texture whose alpha draws AC's shape at rF2's threshold.
 
@@ -1372,17 +1432,41 @@ def main():
     for m in data["meshes"]:
         if m.get("render", True):
             drawn.setdefault(m["rf2_material"], m)
+    dim = albedo_caps(drawn, lums, p90, set(hard))
+    data["dim_scale"] = dim
     for k in hard:
-        scale = GRASS_CARD_TEXTURE if is_grass_card(drawn.get(k)) else 1.0
+        scale = GRASS_CARD_TEXTURE if is_grass_card(drawn.get(k)) else dim.get(k, 1.0)
         key = (disk_of[k], ac_of[k], scale)
         if key not in made:
             made[key] = coverage_copy(disk_of[k], ac_of[k], tex_dir, tmp,
                                       args.texconv, rgb_scale=scale)
             if scale != 1.0:
-                print("   %-18s grass card texture x%.2f" % (k[:18], scale))
+                print("   %-18s %s texture x%.2f" % (
+                    k[:18], "grass card" if k not in dim else "bright cut-out", scale))
         data["alpha_ref"][k] = CUTOUT_REF
         if made[key]:
             data["cutout_tex"][k] = made[key]
+    # The rest of the over-bright materials: a darkened copy of their diffuse.
+    data["dim_tex"] = {}
+    dimmed = {}
+    for k, scale in sorted(dim.items()):
+        if k in hard:
+            continue
+        m = drawn[k]
+        tx = m["textures"].get("txDiffuse")
+        disk = files.get(tx, tx) if tx else None
+        if not disk or not os.path.exists(os.path.join(tex_dir, disk)):
+            continue
+        key = (disk, scale)
+        if key not in dimmed:
+            dimmed[key] = dim_copy(disk, scale, tex_dir, tmp, args.texconv)
+        if dimmed[key]:
+            data["dim_tex"][k] = dimmed[key]
+    if dim:
+        print("bright textures darkened toward rF2's albedo band: %d materials, "
+              "%d copies" % (len(dim), len([v for v in dimmed.values() if v])))
+        for k, scale in sorted(dim.items(), key=lambda kv: kv[1])[:12]:
+            print("   %-28s x%.2f  (albedo %s)" % (k[:28], scale, lums.get(k)))
     data["no_alpha_test"] = sorted(k for k, v in refs.items() if v is None)
     data["gradients"] = sorted(k for k, v in refs.items() if v == GRADIENT)
     print("alpha tests: %d hard cut-outs at %d, alpha remapped from AC's own "

@@ -41,6 +41,23 @@ def full_levels(w, h):
     return max(w, h).bit_length()
 
 
+# AC loads whatever image is inside a .dds name; mod tracks ripped from other
+# games often ship PNGs or JPEGs that way. rF2 reads only real DDS and draws
+# the rest flat blue (ek_nagao: every texture is a PNG).
+IMAGE_MAGIC = ((b"\x89PNG", ".png"), (b"\xff\xd8\xff", ".jpg"),
+               (b"BM", ".bmp"), (b"GIF8", ".gif"))
+
+
+def image_kind(path):
+    """The real extension of a non-DDS image hiding behind a .dds name."""
+    with open(path, "rb") as f:
+        head = f.read(8)
+    for magic, ext in IMAGE_MAGIC:
+        if head.startswith(magic):
+            return ext
+    return None
+
+
 def describe(path):
     with open(path, "rb") as f:
         h = f.read(128)
@@ -73,7 +90,11 @@ def main():
             continue
         info = describe(os.path.join(tex_dir, f))
         if info is None:
-            print("skip (not dds): %s" % f)
+            kind = image_kind(os.path.join(tex_dir, f))
+            if kind:
+                todo.append((f, 0, 0, 0, args.format, kind[1:] + " named .dds"))
+            else:
+                print("skip (not dds): %s" % f)
             continue
         w, h, fourcc, bpp, mips = info
         if fourcc not in BLOCK:
@@ -90,8 +111,14 @@ def main():
     print("re-encoding %d textures" % len(todo))
     converted = failed = 0
     for f, w, h, bpp, fmt, why in todo:
+        src = f
+        if why.endswith("named .dds"):
+            # texconv picks its decoder by extension: give it the real one.
+            src = os.path.join(tmp, os.path.splitext(f)[0] + "." + why.split()[0])
+            shutil.copyfile(os.path.join(tex_dir, f), src)
         r = subprocess.run(
-            [args.texconv, "-f", fmt, "-m", "0", "-sepalpha", "-y", "-o", tmp, f],
+            [args.texconv, "-f", fmt, "-m", "0", "-sepalpha", "-y", "-ft", "dds",
+             "-o", tmp, src],
             cwd=tex_dir, capture_output=True, text=True)
         out = None
         for cand in (f, os.path.splitext(f)[0] + ".DDS",
