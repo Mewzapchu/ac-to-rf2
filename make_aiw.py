@@ -266,7 +266,14 @@ class RoadGrid:
         gx, gz = self.gx(x), self.gz(z)
         return 0 <= gx < self.w and 0 <= gz < self.h and self.grid[gz * self.w + gx]
 
-    def height(self, x, z):
+    def height(self, x, z, ref=None):
+        # Near a known height (a marker, a waypoint), the first surface below
+        # it: the cell average lies between layers where ground stacks.
+        probe = getattr(self, "probe", None)
+        if ref is not None and probe is not None:
+            h = probe.below(x, ref, z)
+            if h is not None:
+                return h
         gx, gz = self.gx(x), self.gz(z)
         i = gz * self.w + gx
         if 0 <= gx < self.w and 0 <= gz < self.h and self.ycnt[i]:
@@ -578,7 +585,7 @@ def pitlane_from_ac(pits, wps, ground):
             if not ground.on_road(lx, lz):
                 continue
         boxes.append((pos[0], pos[1], pos[2], yaw))
-        lane.append((lx, ground.height(lx, lz), lz, yaw))
+        lane.append((lx, ground.height(lx, lz, pos[1]), lz, yaw))
     if len(lane) < 4:
         return None
 
@@ -597,7 +604,7 @@ def pitlane_from_ac(pits, wps, ground):
         gz = bz - math.cos(byaw) * GARAGE_BACK
         if not ground.on_road(gx, gz):
             gx, gz = bx, bz
-        garages.append((gx, ground.height(gx, gz) if ground.on_road(gx, gz) else by,
+        garages.append((gx, ground.height(gx, gz, by) if ground.on_road(gx, gz) else by,
                         gz, byaw))
 
     def nearest(p):
@@ -642,15 +649,15 @@ def build_pitlane(wps, ground):
             lx, lz = x + px * PIT_LANE_OFFSET, z + pz * PIT_LANE_OFFSET
             if not ground.on_road(lx, lz):
                 return None
-            lane.append((lx, ground.height(lx, lz), lz, math.atan2(fx, fz)))
+            lane.append((lx, ground.height(lx, lz, y), lz, math.atan2(fx, fz)))
             if 0 < k < run:
                 bx = lx + px * PIT_BOX_OFFSET
                 bz = lz + pz * PIT_BOX_OFFSET
                 gx = bx + px * GARAGE_OFFSET
                 gz = bz + pz * GARAGE_OFFSET
                 if ground.on_road(bx, bz) and ground.on_road(gx, gz):
-                    boxes.append((bx, ground.height(bx, bz), bz, math.atan2(fx, fz)))
-                    garages.append((gx, ground.height(gx, gz), gz, math.atan2(fx, fz)))
+                    boxes.append((bx, ground.height(bx, bz, y), bz, math.atan2(fx, fz)))
+                    garages.append((gx, ground.height(gx, gz, y), gz, math.atan2(fx, fz)))
         return lane, boxes, garages
 
     best = None
@@ -730,6 +737,7 @@ def build(track_dir, out_path, layout):
 
     ground = RoadGrid(solid)
     probe = SurfaceProbe(solid)
+    ground.probe = probe
 
     # AC's start and pit markers sit at the centre of a marker box, typically a
     # couple of metres up, so cars spawn in mid air and fall. Drop each one onto
