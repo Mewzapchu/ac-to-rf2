@@ -97,7 +97,9 @@ def main():
                 print("skip (not dds): %s" % f)
             continue
         w, h, fourcc, bpp, mips = info
-        if fourcc not in BLOCK:
+        if min(w, h) < 4:
+            todo.append((f, w, h, bpp, args.format, "under 4x4"))
+        elif fourcc not in BLOCK:
             todo.append((f, w, h, bpp, args.format, "%dbpp" % bpp))
         elif (not args.keep_mips and fourcc in SAME_FORMAT
               and max(w, h) >= MIP_MIN and mips < full_levels(w, h)):
@@ -127,6 +129,16 @@ def main():
             if os.path.exists(p):
                 out = p
                 break
+        # Block compression works in 4x4 tiles and rF2 will not create a
+        # texture smaller than one ("error initializing image surface"); mods
+        # embed 1x1 placeholders. Stretch anything that small to 4x4.
+        got = describe(out) if out else None
+        if r.returncode == 0 and got and min(got[0], got[1]) < 4:
+            r = subprocess.run(
+                [args.texconv, "-f", fmt, "-m", "0", "-sepalpha", "-y", "-ft", "dds",
+                 "-w", str(max(4, got[0])), "-h", str(max(4, got[1])),
+                 "-o", tmp, src], cwd=tex_dir, capture_output=True, text=True)
+            why += ", stretched to 4x4"
         if r.returncode != 0 or out is None:
             print("  FAILED %-28s %s" % (f, (r.stdout or r.stderr).strip()[-70:]))
             failed += 1

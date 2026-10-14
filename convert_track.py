@@ -12,6 +12,7 @@ import sys
 import json
 import argparse
 import configparser
+import shutil
 import struct
 from collections import OrderedDict, defaultdict
 
@@ -982,6 +983,30 @@ def extract_textures(kn5_paths, tex_dir, names):
     return n
 
 
+def loose_textures(track_dir, tex_dir, names):
+    """Use the full textures a track ships beside its kn5 files.
+
+    Some mods embed tiny placeholders in the kn5 (ek_nagao: 1x1 PNGs) and
+    ship the real images, up to 22 MB each, in <track>/texture under the same
+    names. Taking the placeholders gave rF2 1x1 textures it refused to load.
+    Only a bigger file replaces an embedded one, so a stale copy in that
+    folder never overrides real content.
+    """
+    folder = os.path.join(track_dir, "texture")
+    if not os.path.isdir(folder):
+        return 0
+    n = 0
+    for name in os.listdir(folder):
+        src = os.path.join(folder, name)
+        dst = os.path.join(tex_dir, names.get(name, name))
+        if not os.path.isfile(src) or not os.path.exists(dst):
+            continue
+        if os.path.getsize(src) > os.path.getsize(dst):
+            shutil.copyfile(src, dst)
+            n += 1
+    return n
+
+
 def needs_blend(mat, alpha):
     """Blend only where AC blends, and only if there is transparency to show.
 
@@ -1355,6 +1380,10 @@ def main():
         tex_dir = os.path.join(out_dir, "textures")
         os.makedirs(tex_dir, exist_ok=True)
         print("extracted %d textures" % extract_textures(kn5_paths, tex_dir, tex_names))
+        n = loose_textures(track_dir, tex_dir, tex_names)
+        if n:
+            print("   took %d textures from the track's texture folder over the "
+                  "placeholders inside the kn5" % n)
 
     print("\nwrote -> %s" % out_dir)
     for f in sorted(os.listdir(out_dir)):

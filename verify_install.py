@@ -156,6 +156,19 @@ def main():
         problems.append("textures referenced but not installed: %s" % sorted(missing)[:5])
     if leaked:
         problems.append("slot names written where filenames belong: %s" % leaked[:5])
+    # Every installed texture a real DDS rF2 can create: not an image under a
+    # .dds name, and not under one 4x4 compression block (ek_nagao shipped
+    # 1x1 placeholders and every one failed to load).
+    unloadable = []
+    for t in sorted(on_disk):
+        with open(os.path.join(map_dir, t), "rb") as fh:
+            head = fh.read(20)
+        if head[:4] != b"DDS ":
+            unloadable.append(t + " (not DDS)")
+        elif min(struct.unpack_from("<II", head, 12)) < 4:
+            unloadable.append(t + " (under 4x4)")
+    if unloadable:
+        problems.append("textures rF2 cannot load: %s" % unloadable[:5])
 
     # 2. the detail levels we decided not to draw are really not drawn
     hidden = set(re.findall(r"Instance=(\S+)\s*\{[^}]*LODOut=\(0\.01\)", scene))
