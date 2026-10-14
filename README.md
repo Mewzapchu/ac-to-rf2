@@ -193,6 +193,7 @@ Other files:
 ## Known bugs
 
 - **Track Cameras** can be underground some(most)times, havent given it much importance.
+- **AI line** on some modded tracks partly runs outside the surfaces the converter recognises as road (e.g. ~1/3 on ek_nagao), so AI cars may drive oddly there. Driving yourself is not affected.
 
 
 <br>
