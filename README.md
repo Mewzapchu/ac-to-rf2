@@ -78,8 +78,12 @@ Drag the AC track folder onto **`convert.bat`**. For example, drag
 If the track has several layouts, the converter lists them and asks which one to
 build. Press Enter for the default layout.
 
-A track takes from about 15 minutes to an hour, depending on its size. Blender
-does most of the work. The result is:
+**How long it takes:** about **20–30 minutes** per track on average, ranging
+from roughly **10 minutes** (e.g. Silverstone) to **over an hour** for large,
+dense tracks like Spa. Blender does most of the work, and a fast CPU and SSD help
+the most. `--skip-geometry` reruns only the later steps in a few minutes.
+
+The result is:
 
 - installed into `rFactor 2\ModDev\Locations\<track>`
 - zipped as `out\<track>\<track>_rf2.zip`, ready to unzip into `ModDev\Locations` on another PC
