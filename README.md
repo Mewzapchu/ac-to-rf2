@@ -109,11 +109,48 @@ python verify_install.py "<rF2>\ModDev\Locations\<track>" out\<track>
 This checks that every texture the scene references exists, that draw ranges,
 shadows and the track database are in place, and prints a summary.
 
-### Driving it
+### Driving it: Developer Mode (do this first)
 
-Start rFactor 2 in **Mod Mode** by running
-`rFactor 2\Bin64\rFactor2 Mod Mode.exe`. It loads everything in `ModDev`. Pick
-the converted track; it appears under its AC folder name, e.g. `ks_silverstone_gp`.
+The converter installs into `ModDev`, which only rF2's **Developer Mode** (Mod
+Mode) loads. To start it:
+
+- In Steam, press **Play** on rFactor 2 and choose the developer / Mod Mode
+  option, or
+- run `rFactor 2\Bin64\rFactor2 Mod Mode.exe`.
+
+Pick the converted track; it appears under its AC folder name, e.g.
+`ks_silverstone_gp`. It is the same game with the same physics. **Always test a
+track here first:** if something is wrong, it is much quicker to fix and
+reconvert before packaging.
+
+### Optional: using it in normal rFactor 2
+
+Normal rF2 (and online servers) only load tracks that are packed into `.mas`
+archives inside an installed `.rfcmp` package.
+
+**Why the converter doesn't do this:** rF2's `ModMgr.exe` has command-line
+options for building MAS files and packages, but in the current build the MAS
+creation option exits without writing anything, so the later steps can't run
+either. The MAS format is encrypted and its files are signed, so writing one
+from scratch isn't practical. That leaves rF2's own GUI tool, done by hand.
+
+It takes about 5–10 minutes per track, in `rFactor 2\Support\Tools\MAS2.exe`:
+
+1. **Create three MAS files.** Drag files from
+   `ModDev\Locations\<track>\` into MAS2 and save each set as its own MAS:
+   - `<track>_assets.mas`: everything in `Assets\GMTs` and `Assets\MAPs`, plus `<track>.tdf`
+   - `<track>_materials.mas`: everything in `Assets\Materials`
+   - `<track>_layout.mas`: everything in the inner `<track>\` folder (`.scn`, `.gdb`, `.aiw`, `.cam` and the rest)
+2. **Package.** Click **Package** → **Create Single Cmp Package** →
+   `<Add New Component>`. Name it after the track, set the type to
+   **Location** and the version to `1.0`, then add the three MAS files and click
+   **Package**. This writes `<track>.rfcmp`.
+3. **Install.** Click **Install** (or open the `.rfcmp` with `Bin64\ModMgr.exe`).
+   The track now shows up in normal rFactor 2.
+
+See Studio 397's
+[packaging tutorial](https://www.studio-397.com/wp-content/uploads/2016/12/rF2_Packaging_Tutorial.pdf)
+for screenshots of these dialogs.
 
 ---
 
@@ -146,7 +183,11 @@ Other files:
   front of the car. It is mitigated, not solved.
 - **Grass:** CSP GrassFX has no rF2 equivalent. Grass brightness is approximated.
 - **Weather and clouds** are set in the rF2 session, not by the converter.
+- **Normal rF2** needs a manual packaging step (see *Optional: using it in normal rFactor 2*).
 
+<br>
+<br>
 
+---
 
-*All the code was written by an LLM
+<p align="center"><sub><i>All the code in this project was written by an LLM.</i></sub></p>
