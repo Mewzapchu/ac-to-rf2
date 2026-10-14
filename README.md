@@ -146,3 +146,7 @@ Other files:
   front of the car. It is mitigated, not solved.
 - **Grass:** CSP GrassFX has no rF2 equivalent. Grass brightness is approximated.
 - **Weather and clouds** are set in the rF2 session, not by the converter.
+
+
+
+*All the code was written by an LLM
