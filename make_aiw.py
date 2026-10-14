@@ -15,6 +15,8 @@ import struct
 import json
 import argparse
 
+import numpy as np
+
 from kn5 import KN5
 
 BINS = 144
@@ -166,6 +168,49 @@ def collect(k, valid_keys=None):
     starts.sort(key=order)
     pits.sort(key=order)
     return starts, pits, road, solid
+
+
+class SurfaceProbe:
+    """Exact surface heights straight below a point, every layer of them.
+
+    RoadGrid keeps one averaged height per cell, which is right on a single
+    layer of ground but not where surfaces stack: on ek_nagao the road at the
+    start sits 20 m above a lower stretch of the mountain, the average landed
+    halfway between, and the grid spawned the cars underground.
+    """
+
+    def __init__(self, tris):
+        a = np.array([[t[0][0], t[0][1], t[1][0], t[1][1], t[2][0], t[2][1],
+                       ys[0], ys[1], ys[2]] for t, ys in tris], np.float64)
+        self.x1, self.z1, self.x2, self.z2, self.x3, self.z3 = a[:, :6].T
+        self.y = a[:, 6:9]
+        self.den = ((self.z2 - self.z3) * (self.x1 - self.x3)
+                    + (self.x3 - self.x2) * (self.z1 - self.z3))
+        self.minx = np.minimum(np.minimum(self.x1, self.x2), self.x3)
+        self.maxx = np.maximum(np.maximum(self.x1, self.x2), self.x3)
+        self.minz = np.minimum(np.minimum(self.z1, self.z2), self.z3)
+        self.maxz = np.maximum(np.maximum(self.z1, self.z2), self.z3)
+
+    def heights(self, x, z):
+        k = np.nonzero((self.minx <= x) & (x <= self.maxx) & (self.minz <= z)
+                       & (z <= self.maxz) & (np.abs(self.den) > 1e-9))[0]
+        if not len(k):
+            return []
+        d = self.den[k]
+        a = ((self.z2[k] - self.z3[k]) * (x - self.x3[k])
+             + (self.x3[k] - self.x2[k]) * (z - self.z3[k])) / d
+        b = ((self.z3[k] - self.z1[k]) * (x - self.x3[k])
+             + (self.x1[k] - self.x3[k]) * (z - self.z3[k])) / d
+        inside = (a >= -1e-6) & (b >= -1e-6) & (a + b <= 1 + 1e-6)
+        ys = self.y[k]
+        h = a * ys[:, 0] + b * ys[:, 1] + (1 - a - b) * ys[:, 2]
+        return sorted(float(v) for v in h[inside])
+
+    def below(self, x, y, z, reach=3.0):
+        """The highest surface under (x, y, z), or None. AC's markers float a
+        metre or so up; `reach` allows for one sitting slightly in the road."""
+        hs = [h for h in self.heights(x, z) if h <= y + reach]
+        return hs[-1] if hs else None
 
 
 class RoadGrid:
@@ -684,16 +729,19 @@ def build(track_dir, out_path, layout):
     print("path %d waypoints, %.1f m around" % (n, length))
 
     ground = RoadGrid(solid)
+    probe = SurfaceProbe(solid)
 
     # AC's start and pit markers sit at the centre of a marker box, typically a
     # couple of metres up, so cars spawn in mid air and fall. Drop each one onto
-    # the surface underneath it.
+    # the surface directly underneath it -- the first one down, not the cell's
+    # average, which on stacked ground lies between the layers.
     def on_ground(items):
         out = []
         for pos, yaw, name in items:
             y = pos[1]
-            if ground.on_road(pos[0], pos[2]):
-                y = ground.height(pos[0], pos[2]) + 0.05
+            h = probe.below(pos[0], pos[1], pos[2])
+            if h is not None:
+                y = h + 0.05
             out.append(((pos[0], y, pos[2]), yaw, name))
         return out
 
