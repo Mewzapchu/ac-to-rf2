@@ -39,7 +39,8 @@ C:\Program Files (x86)\Steam\steamapps\common\rFactor 2
 C:\Program Files\Blender Foundation\Blender 3.6\blender.exe
 ```
 
-If yours differ, pass `--blender "<path to blender.exe>"` to `build_track.py`.
+Only Python needs to be in PATH. Blender and `texconv.exe` are called by these
+full paths. If yours differ, pass `--blender "<path to blender.exe>"` to `build_track.py`.
 You can also edit the constants at the top of `build_track.py` (`BLENDER`),
 `bake_layers.py` and `fix_textures.py` (`TEXCONV`), and the `--ac-root` default
 in `convert_track.py`.
