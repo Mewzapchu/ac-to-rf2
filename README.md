@@ -189,6 +189,11 @@ Other files:
 - **Weather and clouds** are set in the rF2 session, not by the converter.
 - **Normal rF2** needs a manual packaging step (see *Optional: using it in normal rFactor 2*).
 
+## Known bugs
+
+- **Track Cameras** can be underground some(most)times, havent given it much importance.
+
+
 <br>
 <br>
 
