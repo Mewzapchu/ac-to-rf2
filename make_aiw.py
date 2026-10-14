@@ -24,6 +24,8 @@ INSET = 0.55          # fraction of the road radius the path sits at
 SPACING = 6.0         # metres between waypoints
 SECTORS = 3
 GARAGE_BACK = 6.0   # metres behind the pit box
+# Spawn every session on AC's start spots instead of behind the pit boxes.
+GARAGES_AT_GRID = True
 
 
 def mirror_pos(p):
@@ -767,6 +769,16 @@ def build(track_dir, out_path, layout):
         print("!! no pit lane could be placed, falling back to AC pit dummies")
         pit_boxes = [(p[0], p[1], p[2], y) for p, y, _nm in pits]
         pit_garages = pit_boxes
+    # Practice starts in the garage. Built behind AC's pit boxes, the garages
+    # landed somewhere AC never spawns a car, inside buildings or off a pit
+    # lane that was not one (Wuhu Town's ran from waypoint 39 to 39). AC's own
+    # start spots are the one position every track gets right, so every
+    # session starts there for now.
+    if GARAGES_AT_GRID and starts:
+        pit_garages = [(p[0], p[1], p[2], y)
+                       for p, y, _nm in (starts[i % len(starts)]
+                                         for i in range(len(pit_boxes)))]
+        print("garages: at AC's start spots (%d)" % len(starts))
     total_wp = len(wps) + (len(pl["lane"]) + 2 * len(pl["boxes"]) if pl else 0)
 
     L = []
