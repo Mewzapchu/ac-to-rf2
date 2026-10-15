@@ -89,6 +89,12 @@ The result is:
 - installed into `rFactor 2\ModDev\Locations\<track>`
 - zipped as `out\<track>\<track>_rf2.zip`, ready to unzip into `ModDev\Locations` on another PC
 
+**Disk space:** the build also leaves its working files in `out\<track>\` inside
+this folder: extracted textures, meshes and logs, often several GB per track.
+The installed track in rF2 doesn't need them. Delete `out\` whenever you like;
+you only lose the ability to rerun a track's later steps with `--skip-geometry`.
+Git ignores `out\`, so none of it is ever uploaded.
+
 ### From the command line
 
 ```
