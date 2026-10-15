@@ -1,7 +1,8 @@
 @echo off
 rem Drag an Assetto Corsa track folder onto this file to convert it to rFactor 2.
-rem It installs into rFactor 2\ModDev\Locations and also writes a zip you can
-rem copy anywhere: unzip it into ModDev\Locations on any machine with rF2.
+rem It installs into rFactor 2\ModDev\Locations. A copy of the track folder is
+rem left in out\<track>\rf2\<track>: copy it into ModDev\Locations on any
+rem machine with rF2.
 rem
 rem For a track with several layouts, drag the folder and then type the layout
 rem when asked (for example: touristenfahrten). Press Enter for the default.
@@ -22,14 +23,14 @@ for %%F in ("%~1\models_*.ini") do (
 )
 :run
 echo.
-echo Converting "%~nx1"  -- this takes about an hour, Blender does most of it.
+echo Converting "%~nx1"  -- this takes 10 minutes to over an hour, Blender does most of it.
 echo.
 if defined LAYOUT (
-  python "%HERE%build_track.py" "%~1" --install "%RF2%" --zip --layout "%LAYOUT%"
+  python "%HERE%build_track.py" "%~1" --install "%RF2%" --layout "%LAYOUT%"
 ) else (
-  python "%HERE%build_track.py" "%~1" --install "%RF2%" --zip
+  python "%HERE%build_track.py" "%~1" --install "%RF2%"
 )
 echo.
 echo Done. Installed into "%RF2%"
-echo The zip is in "%HERE%out\" next to the track's other output.
+echo A copy of the track folder is in "%HERE%out\<track>\rf2\<track>".
 pause

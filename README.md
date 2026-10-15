@@ -87,18 +87,19 @@ the most. `--skip-geometry` reruns only the later steps in a few minutes.
 The result is:
 
 - installed into `rFactor 2\ModDev\Locations\<track>`
-- zipped as `out\<track>\<track>_rf2.zip`, ready to unzip into `ModDev\Locations` on another PC
+- copied to `out\<track>f2\<track>`: to use the track on another PC, copy that
+  folder (zip it yourself if you like) into that PC's `ModDev\Locations`
 
 **Disk space:** the build also leaves its working files in `out\<track>\` inside
 this folder: extracted textures, meshes and logs, often several GB per track.
-The installed track in rF2 doesn't need them. Delete `out\` whenever you like;
-you only lose the ability to rerun a track's later steps with `--skip-geometry`.
+The installed track in rF2 doesn't need them. Delete `out\` whenever you like
+(copy out any `rf2\<track>` folder you want to keep first); you only lose the ability to rerun a track's later steps with `--skip-geometry`.
 Git ignores `out\`, so none of it is ever uploaded.
 
 ### From the command line
 
 ```
-python build_track.py "<AC track folder>" --install "C:\Program Files (x86)\Steam\steamapps\common\rFactor 2\ModDev\Locations" --zip
+python build_track.py "<AC track folder>" --install "C:\Program Files (x86)\Steam\steamapps\common\rFactor 2\ModDev\Locations"
 ```
 
 Useful options:
@@ -107,7 +108,6 @@ Useful options:
 |---|---|
 | `--layout <name>` | Which layout of a multi-layout track: the part after `models_` in `models_<name>.ini` (e.g. `--layout gp`) |
 | `--hour HH:MM` | Session start time written into the GDB (default `12:00`; e.g. `18:30` for a low evening sun) |
-| `--zip` | Also write the ready-to-share zip |
 | `--skip-geometry` | Reuse the meshes from the previous run and redo only the later steps (much faster) |
 | `--blender <path>` | Use a Blender that is not in the default folder |
 

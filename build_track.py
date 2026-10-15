@@ -110,8 +110,6 @@ def main():
     ap.add_argument("--blender", default=BLENDER)
     ap.add_argument("--layout", default=None,
                     help="for a multi-layout track: the part after models_ in models_<layout>.ini")
-    ap.add_argument("--zip", action="store_true",
-                    help="also write <track>_rf2.zip, ready to unzip into ModDev/Locations")
     ap.add_argument("--skip-geometry", action="store_true",
                     help="reuse the meshes already exported")
     args = ap.parse_args()
@@ -192,24 +190,6 @@ def main():
         for f in os.listdir(lay) if os.path.isdir(lay) else []:
             if f.lower().endswith((".cbash", ".rrshd")):
                 os.remove(os.path.join(lay, f))
-    if args.zip:
-        # The staged location, exactly as installed, as one file: unzip it
-        # into rFactor 2/ModDev/Locations on any machine and it appears there
-        # as <track>. Cache files rF2 writes on first load are left out.
-        import zipfile
-        stage = os.path.join(out, "rf2", track)
-        zpath = os.path.join(out, track + "_rf2.zip")
-        if os.path.isdir(stage):
-            with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
-                for root, _dirs, names in os.walk(stage):
-                    for nm in names:
-                        if nm.lower().endswith((".cbash", ".rrshd")):
-                            continue
-                        full = os.path.join(root, nm)
-                        z.write(full, os.path.join(track, os.path.relpath(full, stage)))
-            print("   zip -> %s (%.0f MB)" % (zpath, os.path.getsize(zpath) / 1e6))
-        else:
-            print("   !! no staged location at %s, nothing to zip" % stage)
     if WARNINGS:
         print("\n%d warning(s) -- read these before loading the track:" % len(set(WARNINGS)))
         for w in dict.fromkeys(WARNINGS):
