@@ -32,5 +32,7 @@ if defined LAYOUT (
 )
 echo.
 echo Done. Installed into "%RF2%"
-echo A copy of the track folder is in "%HERE%out\<track>\rf2\<track>".
+set "TRACK=%~nx1"
+if defined LAYOUT set "TRACK=%~nx1_%LAYOUT%"
+echo A copy of the track folder is in "%HERE%out\%TRACK%\rf2\%TRACK%".
 pause
