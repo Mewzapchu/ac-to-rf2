@@ -189,11 +189,56 @@ Other files:
 - **Grass:** CSP GrassFX has no rF2 equivalent. Grass brightness is approximated.
 - **Weather and clouds** are set in the rF2 session, not by the converter.
 - **Normal rF2** needs a manual packaging step (see *Optional: using it in normal rFactor 2*).
+- **Spawn point:** every session (practice included) starts on AC's main start
+  grid, not in the pits. Pit boxes built from AC's pit markers were unreliable on
+  mod tracks, so garages are placed on the start spots
+  (`GARAGES_AT_GRID` in `make_aiw.py`).
 
 ## Known bugs
 
 - **Track Cameras** can be underground some(most)times, havent given it much importance.
 - **AI line** on some modded tracks partly runs outside the surfaces the converter recognises as road (e.g. ~1/3 on ek_nagao), so AI cars may drive oddly there. Driving yourself is not affected.
+
+## Scrambled (protected) mod tracks
+
+Some mod tracks store their model data in a deliberately scrambled form.
+`ek_nagao` is the one found so far. AC with CSP draws them correctly; the
+converter can only partly recover them.
+
+**What the data looks like:** every texture coordinate is stored as
+`0.5 + d` or `0.5 - d`, and which sign each point gets is random. Light
+directions (vertex normals) are also randomly flipped. Read as stored, every
+road tile samples across the whole texture sheet and the track turns to streaks.
+
+**What we tried:**
+
+- Rendered the road directly from the kn5, with rF2 out of the loop: it is
+  scrambled there too, so the converter is not the cause. Wuhu Town,
+  Silverstone and Laguna render clean the same way.
+- Checked the layout's other model files and CSP's `.vao-patch` file. The
+  model files hold only objects; the patch holds only ambient occlusion.
+- Compared the kn5 headers with tracks that convert correctly: they are
+  identical.
+- Sampled the stored coordinates with "mirror" and "clamp" texture addressing:
+  both still scrambled.
+- Looked for the true sign in the rest of each vertex (normal, tangent): it
+  matches none of them, 50% against everything. Within a road quad all four
+  signs agree only 12% of the time, which is chance.
+
+**What the converter does:** `kn5.py` (`unfold_vertex_data`) reads every
+coordinate as `0.5 - |d|` and turns flipped normals back towards their faces.
+That is correct for most of the road and grass, so the track is drivable and
+mostly right. The triangles whose real sign was the other one still show the
+wrong part of the texture sheet, which shows as stripes and patches. It only
+switches on for a model file where it shrinks the typical triangle's texture
+span at least 8× (37× on ek_nagao, 1.0× on stock tracks and Wuhu Town), so
+normal tracks are never touched.
+
+**Conclusion:** the correct signs are not in any file we can read. Something
+on the AC/CSP side must know them, most likely a decoding step for protected
+models. This is an inference, not proven. Recovering the rest would mean
+breaking that protection, so it is not attempted here. For a clean conversion,
+ask the track's author for an unprotected version.
 
 
 <br>
