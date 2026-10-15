@@ -80,6 +80,69 @@ def placement_matrix(position, rotation):
             position[0], position[1], position[2], 1.0]
 
 
+# Some ripped tracks (ek_nagao) store every UV as 0.5 + d with the sign of d
+# scrambled per vertex, and flip vertex normals at random. AC with CSP draws
+# them correctly; read as they stand, every face samples across half the
+# atlas and the road turns to streaks. Measured on ek_nagao, the true value
+# is 0.5 - |d|: rendered from the kn5 alone it gives clean asphalt with its
+# edge lines and clean grass, where the stored values give a patchwork.
+#
+# Detected per file, never per mesh: folding about 0.5 shrinks a face's UV
+# span 37x on the median ek_nagao mesh and 1.00x on Silverstone, Laguna,
+# Highlands and Wuhu Town -- though 169 single Silverstone meshes pass a
+# per-mesh test of 3x.
+FOLD_RATIO = 8.0
+
+
+def _uv_span_ratio(n):
+    import statistics
+    U, I = n.uvs, n.indices
+    raw, fold = [], []
+    for i in range(0, len(I) - 2, 3):
+        tri = (U[I[i]], U[I[i + 1]], U[I[i + 2]])
+        raw.append(sum(max(t[k] for t in tri) - min(t[k] for t in tri) for k in (0, 1)))
+        f = [tuple(0.5 - abs(c - 0.5) for c in t) for t in tri]
+        fold.append(sum(max(t[k] for t in f) - min(t[k] for t in f) for k in (0, 1)))
+    return statistics.median(raw) / max(statistics.median(fold), 1e-6)
+
+
+def unfold_vertex_data(kn5):
+    """Undo the scrambled UV and normal signs described above, if present."""
+    import statistics
+    meshes = [n for n in kn5.walk()
+              if n.type in (2, 3) and n.uvs and n.indices and len(n.indices) >= 30]
+    if not meshes:
+        return False
+    sample = meshes[:: max(1, len(meshes) // 200)]
+    if statistics.median(_uv_span_ratio(n) for n in sample) < FOLD_RATIO:
+        return False
+    for n in meshes:
+        n.uvs = [(0.5 - abs(u - 0.5), 0.5 - abs(v - 0.5)) for u, v in n.uvs]
+        if not n.normals:
+            continue
+        # A vertex normal facing away from the faces around it is a flipped
+        # one: turn it round. Normals at right angles to them (grass cards
+        # lit as the ground) are left as they are.
+        acc = [[0.0, 0.0, 0.0] for _ in n.verts]
+        V, I = n.verts, n.indices
+        for i in range(0, len(I) - 2, 3):
+            a, b, c = V[I[i]], V[I[i + 1]], V[I[i + 2]]
+            e1 = [b[k] - a[k] for k in range(3)]
+            e2 = [c[k] - a[k] for k in range(3)]
+            fn = (e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2],
+                  e1[0] * e2[1] - e1[1] * e2[0])
+            for j in I[i:i + 3]:
+                for k in range(3):
+                    acc[j][k] += fn[k]
+        out = []
+        for nv, f in zip(n.normals, acc):
+            fl = sum(x * x for x in f) ** 0.5
+            dot = sum(nv[k] * f[k] for k in range(3)) / fl if fl > 0 else 0.0
+            out.append(tuple(-x for x in nv) if dot < -0.2 else nv)
+        n.normals = out
+    return True
+
+
 class KN5:
     def __init__(self, path, geometry=False, placement=None):
         self.geometry = geometry
@@ -108,6 +171,7 @@ class KN5:
             self.materials.append(self.read_material(r))
         self.root = self.read_node(r, None)
         self.consumed = r.p
+        self.folded_uvs = geometry and unfold_vertex_data(self)
         if placement:
             # Where the track's models.ini puts this whole file. A parent
             # above the root, so every world transform walking up the parents
