@@ -163,6 +163,8 @@ def main():
     for t in sorted(on_disk):
         with open(os.path.join(map_dir, t), "rb") as fh:
             head = fh.read(20)
+        if not t.lower().endswith(".dds"):
+            continue                    # a real PNG/TGA, which rF2 loads
         if head[:4] != b"DDS ":
             unloadable.append(t + " (not DDS)")
         elif min(struct.unpack_from("<II", head, 12)) < 4:
