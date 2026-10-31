@@ -8,6 +8,7 @@ with its rF2 material name, and exports one gmt per mesh using Traveller's
 io_rf2_gmt addon. Writes exported.json listing the gmt files actually produced,
 so the scene file can be rebuilt from reality rather than from guesses.
 """
+import gc
 import os
 import sys
 import json
@@ -202,6 +203,10 @@ def sanitize(name):
 # 65535 of them. Anything past ~21845 triangles takes the exporter down with an
 # access violation rather than an error, so split before handing it over.
 MAX_TRIS = 20000
+
+# What one export costs beyond its triangles, in triangles: 0.1 s of fixed
+# cost at 1.5 s per 10k triangles (see the shard split in main).
+SHARD_MESH_COST = 700
 
 
 def split_node(node):
@@ -444,6 +449,12 @@ def main():
     limit = None
     if "--limit" in args:
         limit = int(args[args.index("--limit") + 1])
+    # "--shard 2/6": one of six Blenders sharing this stage (build_track runs
+    # them side by side). Every shard walks every mesh, so names and order
+    # come out exactly as in a single run, and exports only its own share.
+    shard, shards = 0, 1
+    if "--shard" in args:
+        shard, shards = (int(x) for x in args[args.index("--shard") + 1].split("/"))
     # AC bakes lighting into its textures, so surfaces read brighter than cars
     # rF2 lights itself. These scale every material down to compensate.
     # Fallbacks for materials that declare no coefficients, plus a global trim.
@@ -887,6 +898,12 @@ def main():
     # written runs ahead of the number of source meshes. Progress counts the
     # source meshes, which is what the total is.
     done = 0
+    # How busy each shard's share is so far. A mesh goes to the least busy,
+    # weighed by what an export was measured to cost in single runs: about
+    # 0.1 s each plus 1.5 s per 10k triangles (Spa, Silverstone, Nagao), so a
+    # mesh counts as SHARD_MESH_COST triangles on top of its own.
+    load = [0] * shards
+    seq = -1
 
     for path in data["kn5"]:
         k = KN5(path, geometry=True, placement=data.get("placements", {}).get(path))
@@ -910,6 +927,13 @@ def main():
                 i += 1
                 n = "%s_%d" % (name, i)
             used_names.add(n)
+            seq += 1
+            if shards > 1:
+                owner = load.index(min(load))
+                load[owner] += node.index_count // 3 + SHARD_MESH_COST
+                if owner != shard:
+                    done += 1
+                    continue
 
             matrix = AC_TO_RF2 @ world_matrix(node)
             parts = list(split_node(node))
@@ -983,6 +1007,10 @@ def main():
                             "radius": row.get("radius", 0.0),
                             "tris": row["tris"],
                         })
+                        if shards > 1:
+                            # Where this belongs in a single run's list;
+                            # build_track sorts the shards back by it.
+                            exported[-1]["_seq"] = [seq, pi]
                     else:
                         print("!! no file produced for %s" % pname)
                 except Exception as exc:
@@ -1006,12 +1034,18 @@ def main():
                     pass
             if limit and count >= limit:
                 break
+        # Let go of this model before reading the next. Its meshes point at
+        # their parents and children, so dropping the name alone leaves it to
+        # Python's occasional cycle collection: measured on Laguna, all ten
+        # files stayed in memory together (3.3 GB), in every Blender.
+        k = None
+        gc.collect()
         if limit and count >= limit:
             break
 
     # Timing trigger strips, if make_aiw.py produced them.
     extras_path = os.path.join(os.path.dirname(map_path), "sectors.json")
-    if os.path.exists(extras_path) and not limit:
+    if os.path.exists(extras_path) and not limit and shard == 0:
         # Timing strips must be crossed but never seen, so they get a fully
         # transparent texture rather than borrowing a visible one.
         clear_img = image_for("_invisible.dds")
@@ -1050,6 +1084,9 @@ def main():
                                      "material": "road_timing",
                                      "physical": True, "timing": True,
                                      "tris": 2})
+                    if shards > 1:
+                        # After every mesh, as in a single run.
+                        exported[-1]["_seq"] = [seq + 1, len(exported)]
                     print("timing poly %s -> %s" % (spec["name"], match or new[0]))
                 else:
                     print("!! no file produced for %s" % spec["name"])

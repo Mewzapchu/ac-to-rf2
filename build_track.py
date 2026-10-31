@@ -19,6 +19,8 @@ import struct
 import argparse
 import subprocess
 
+from parallel import default_jobs
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 BLENDER = r"C:\Program Files\Blender Foundation\Blender 3.6\blender.exe"
 
@@ -31,12 +33,16 @@ def step(n, title):
 WARNINGS = []
 
 
-def run(args, quiet=False):
-    r = subprocess.run(args, capture_output=True, text=True, cwd=HERE)
-    out = (r.stdout or "") + (r.stderr or "")
+def collect_warnings(out):
     # Collected for the end of the build, where they cannot scroll away.
     WARNINGS.extend(l.strip() for l in out.splitlines()
                     if l.strip().startswith(("WARNING", "!! no file produced")))
+
+
+def run(args, quiet=False):
+    r = subprocess.run(args, capture_output=True, text=True, cwd=HERE)
+    out = (r.stdout or "") + (r.stderr or "")
+    collect_warnings(out)
     if r.returncode != 0:
         print(out[-2000:])
         raise SystemExit("failed: %s" % " ".join(str(a) for a in args[:3]))
@@ -93,6 +99,87 @@ def write_clear_texture(path):
         f.write(bytes(16))
 
 
+GEOMETRY_LINES = ("EXPORTED", "backdrop", "materials prepared", "!!")
+
+
+def blender_stage(pre, post, gmt_dir, jobs):
+    """Run the geometry stage, split across `jobs` Blenders when above 1.
+
+    Blender runs its scripts, the rF2 exporter included, on one core, and
+    each mesh is exported to a gmt of its own. So the meshes are shared out:
+    every Blender walks the whole model (names and order stay those of a
+    single run) and exports only its share, into a folder of its own -- the
+    stage finds what the exporter wrote by looking at its output folder,
+    which only works if nobody else writes there. The shares are then moved
+    back into one folder and listed in single-run order.
+
+    The Blender command line is pre + [output folder] + post.
+    """
+    if jobs <= 1:
+        log = run(pre + [gmt_dir] + post, quiet=True)
+        for line in log.splitlines():
+            if line.startswith(GEOMETRY_LINES):
+                print("   " + line[:160])
+        return log
+
+    shard_dirs = [os.path.join(gmt_dir, "_shard%d" % i) for i in range(jobs)]
+    procs = []
+    for i, d in enumerate(shard_dirs):
+        os.makedirs(d)
+        logf = open(os.path.join(d, "blender.log"), "w")
+        procs.append((subprocess.Popen(
+            pre + [d] + post + ["--shard", "%d/%d" % (i, jobs)],
+            stdout=logf, stderr=subprocess.STDOUT, text=True, cwd=HERE), logf))
+    print("   %d Blenders side by side" % jobs)
+    for p, logf in procs:
+        p.wait()
+        logf.close()
+
+    exported, logs, printed = [], [], set()
+    for i, d in enumerate(shard_dirs):
+        log = open(os.path.join(d, "blender.log"), errors="replace").read()
+        logs.append(log)
+        collect_warnings(log)
+        record = os.path.join(d, "exported.json")
+        # Blender can fail without a non-zero exit code; a missing record is
+        # the sign, as for a single run.
+        if procs[i][0].returncode != 0 or not os.path.exists(record):
+            print(log[-2500:])
+            raise SystemExit("geometry stage: Blender %d of %d failed (log above, "
+                             "and in %s)" % (i + 1, jobs, d))
+        for line in log.splitlines():
+            # Every shard prepares every material, so their messages repeat.
+            if line.startswith(GEOMETRY_LINES) and not line.startswith("EXPORTED") \
+                    and line not in printed:
+                printed.add(line)
+                print("   " + line[:160])
+        for e in json.load(open(record)):
+            e["_dir"] = d
+            exported.append(e)
+
+    exported.sort(key=lambda e: e["_seq"])
+    merged, names = [], set()
+    for e in exported:
+        src = os.path.join(e.pop("_dir"), e["gmt"])
+        del e["_seq"]
+        # A single run would have had the exporter rename or overwrite a
+        # clash. None has been seen (six tracks); say so loudly if one is.
+        if e["gmt"].lower() in names:
+            msg = "WARNING two meshes exported as %s; kept the first" % e["gmt"]
+            print("   " + msg)
+            WARNINGS.append(msg)
+            continue
+        names.add(e["gmt"].lower())
+        os.replace(src, os.path.join(gmt_dir, e["gmt"]))
+        merged.append(e)
+    with open(os.path.join(gmt_dir, "exported.json"), "w") as f:
+        json.dump(merged, f, indent=1)
+    for d in shard_dirs:
+        shutil.rmtree(d, ignore_errors=True)
+    print("   EXPORTED %d (from %d Blenders)" % (len(merged), jobs))
+    return "\n".join(logs)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("track_dir")
@@ -114,6 +201,10 @@ def main():
                     help="for a multi-layout track: the part after models_ in models_<layout>.ini")
     ap.add_argument("--skip-geometry", action="store_true",
                     help="reuse the meshes already exported")
+    ap.add_argument("--jobs", type=int, default=default_jobs(),
+                    help="Blenders and texture conversions run side by side "
+                         "(default %d here; 1 runs everything one at a time, as "
+                         "before)" % default_jobs())
     args = ap.parse_args()
     if args.install == "auto":
         import steam_paths
@@ -131,7 +222,7 @@ def main():
     run([py, "convert_track.py", args.track_dir, "--textures"] + lay)
 
     step(2, "texture formats")
-    run([py, "fix_textures.py", os.path.join(out, "textures")])
+    run([py, "fix_textures.py", os.path.join(out, "textures"), "--jobs", str(args.jobs)])
     tex = os.path.join(out, "textures")
     write_clear_texture(os.path.join(tex, "_invisible.dds"))
     # Black. White was the neutral value if rF2 multiplied this by
@@ -145,7 +236,8 @@ def main():
 
     step(3, "composing multilayer materials")
     run([py, "bake_layers.py", out, "--size", str(args.bake_size),
-         "--grain", args.grain, "--detail-metres", args.detail_metres])
+         "--grain", args.grain, "--detail-metres", args.detail_metres,
+         "--jobs", str(args.jobs)])
 
     step(4, "waypoints, grid and pit lane")
     run([py, "make_aiw.py", args.track_dir, os.path.join(out, track + ".AIW")] + lay)
@@ -164,13 +256,11 @@ def main():
         # installed alongside a scene file that does not reference them.
         if os.path.isdir(gmt_dir):
             shutil.rmtree(gmt_dir)
-        log = run([args.blender, "--background", "--factory-startup", "--python",
-                   "blender_stage.py", "--", os.path.join(out, "material_map.json"),
-                   gmt_dir, "--diffuse", args.diffuse,
-                   "--ambient", args.ambient, "--gain", args.gain], quiet=True)
-        for line in log.splitlines():
-            if line.startswith(("EXPORTED", "backdrop", "materials prepared", "!!")):
-                print("   " + line[:160])
+        log = blender_stage(
+            [args.blender, "--background", "--factory-startup", "--python",
+             "blender_stage.py", "--", os.path.join(out, "material_map.json")],
+            ["--diffuse", args.diffuse, "--ambient", args.ambient, "--gain", args.gain],
+            gmt_dir, args.jobs)
 
     # Blender can fail without a non-zero exit code, so check the result rather
     # than trusting it: an empty record means nothing was exported.

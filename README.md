@@ -20,6 +20,7 @@ per-track hacks. It has been tested on Silverstone, Spa, Laguna Seca and Highlan
 | What | Version | Where to get it |
 |---|---|---|
 | Windows | 10 or 11 | The scripts call Windows tools (`texconv.exe`, Blender) |
+| Memory | 16 GB recommended | With less, the converter runs fewer jobs side by side and takes longer (see `--jobs`) |
 | [Assetto Corsa](https://store.steampowered.com/app/244210/Assetto_Corsa/) | any | Steam. Provides the tracks to convert and `system/data/surfaces.ini` |
 | [rFactor 2](https://store.steampowered.com/app/365960/rFactor_2/) | current Steam build | Steam. Includes ModDev, `texconv.exe` and the GMT exporter add-on |
 | [Python](https://www.python.org/downloads/windows/) | 3.10 or newer | python.org. Tick **"Add python.exe to PATH"** in the installer |
@@ -85,10 +86,11 @@ Drag the AC track folder onto **`convert.bat`**. For example, drag
 If the track has several layouts, the converter lists them and asks which one to
 build. Press Enter for the default layout.
 
-**How long it takes:** about **20–30 minutes** per track on average, ranging
-from roughly **10 minutes** (e.g. Silverstone) to **over an hour** for large,
-dense tracks like Spa. Blender does most of the work, and a fast CPU and SSD help
-the most. `--skip-geometry` reruns only the later steps in a few minutes.
+**How long it takes:** about **5–7 minutes** per track on a 12-thread CPU
+(measured: Spa 4.5 minutes, Laguna Seca 7). Blender does most of the work and the
+converter runs several Blenders side by side, so more CPU cores help the most.
+One job at a time (`--jobs 1`) it is about **11–15 minutes**.
+`--skip-geometry` reruns only the later steps in a few minutes.
 
 The result is:
 
@@ -117,6 +119,7 @@ Useful options:
 | `--layout <name>` | Which layout of a multi-layout track: the part after `models_` in `models_<name>.ini` (e.g. `--layout gp`) |
 | `--hour HH:MM` | Session start time written into the GDB (default `12:00`; e.g. `18:30` for a low evening sun) |
 | `--skip-geometry` | Reuse the meshes from the previous run and redo only the later steps (much faster) |
+| `--jobs <n>` | How many Blenders and texture conversions run side by side. The default is half your CPU threads, at most 6, and fewer if free memory is short (about 2.5 GB each). `--jobs 1` runs everything one at a time, as older versions did |
 | `--blender <path>` | Use a Blender that is not in the default folder |
 
 ### Checking an install
@@ -191,6 +194,7 @@ Other files:
 
 - `kn5.py`: reader for AC's kn5 model format
 - `steam_paths.py`: finds Assetto Corsa, rFactor 2 and `texconv.exe` in your Steam libraries
+- `parallel.py`: how many jobs run side by side (`--jobs`), and the helper that runs texture conversions in parallel
 - `probe_*.py`: diagnostic tools used while working out the rF2 formats
 - `NOTES.md`: a running log of every finding, with the measurement behind each decision. Read this before changing how materials are translated.
 

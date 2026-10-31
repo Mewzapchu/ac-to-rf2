@@ -17,6 +17,7 @@ import argparse
 import subprocess
 
 from steam_paths import TEXCONV  # in whichever Steam library has rF2
+from parallel import default_jobs, ordered_map
 BLOCK = (b"DXT1", b"DXT3", b"DXT5", b"BC4U", b"BC5U", b"ATI1", b"ATI2")
 
 # Rebuilding a block compressed texture means decoding and recompressing it, so
@@ -77,6 +78,8 @@ def main():
                     help="format for textures DX11 cannot load at all")
     ap.add_argument("--keep-mips", action="store_true",
                     help="leave AC's truncated mip chains alone")
+    ap.add_argument("--jobs", type=int, default=default_jobs(),
+                    help="textures converted at the same time (1: one by one)")
     args = ap.parse_args()
 
     tex_dir = os.path.abspath(args.tex_dir)
@@ -110,21 +113,23 @@ def main():
         return
 
     print("re-encoding %d textures" % len(todo))
-    converted = failed = 0
-    for f, w, h, bpp, fmt, why in todo:
+
+    def convert(job, work):
+        """One texture; returns the line to print and whether it worked."""
+        f, w, h, bpp, fmt, why = job
         src = f
         if why.endswith("named .dds"):
             # texconv picks its decoder by extension: give it the real one.
-            src = os.path.join(tmp, os.path.splitext(f)[0] + "." + why.split()[0])
+            src = os.path.join(work, os.path.splitext(f)[0] + "." + why.split()[0])
             shutil.copyfile(os.path.join(tex_dir, f), src)
         r = subprocess.run(
             [args.texconv, "-f", fmt, "-m", "0", "-sepalpha", "-y", "-ft", "dds",
-             "-o", tmp, src],
+             "-o", work, src],
             cwd=tex_dir, capture_output=True, text=True)
         out = None
         for cand in (f, os.path.splitext(f)[0] + ".DDS",
                      os.path.splitext(f)[0] + ".dds"):
-            p = os.path.join(tmp, cand)
+            p = os.path.join(work, cand)
             if os.path.exists(p):
                 out = p
                 break
@@ -136,15 +141,21 @@ def main():
             r = subprocess.run(
                 [args.texconv, "-f", fmt, "-m", "0", "-sepalpha", "-y", "-ft", "dds",
                  "-w", str(max(4, got[0])), "-h", str(max(4, got[1])),
-                 "-o", tmp, src], cwd=tex_dir, capture_output=True, text=True)
+                 "-o", work, src], cwd=tex_dir, capture_output=True, text=True)
             why += ", stretched to 4x4"
         if r.returncode != 0 or out is None:
-            print("  FAILED %-28s %s" % (f, (r.stdout or r.stderr).strip()[-70:]))
-            failed += 1
-            continue
+            return False, "  FAILED %-28s %s" % (f, (r.stdout or r.stderr).strip()[-70:])
         shutil.move(out, os.path.join(tex_dir, f))
-        print("  %-28s %dx%d %-14s -> %s" % (f, w, h, why, fmt))
-        converted += 1
+        return True, "  %-28s %dx%d %-14s -> %s" % (f, w, h, why, fmt)
+
+    # Each texture is its own texconv run, so they go side by side.
+    converted = failed = 0
+    for ok, line in ordered_map(convert, todo, args.jobs, tmp):
+        print(line)
+        if ok:
+            converted += 1
+        else:
+            failed += 1
 
     shutil.rmtree(tmp, ignore_errors=True)
     print("converted %d, failed %d" % (converted, failed))

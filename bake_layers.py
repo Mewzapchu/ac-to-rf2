@@ -32,6 +32,7 @@ import subprocess
 import numpy as np
 
 from steam_paths import TEXCONV  # in whichever Steam library has rF2
+from parallel import default_jobs, ordered_map
 CHANNELS = ("R", "G", "B", "A")
 
 # Resizing or building mips, texconv filters colour weighted by alpha unless
@@ -987,6 +988,8 @@ def main():
     ap.add_argument("--no-two-stage", action="store_true",
                     help="bake everything instead of using rF2's two texture shader")
     ap.add_argument("--texconv", default=TEXCONV)
+    ap.add_argument("--jobs", type=int, default=default_jobs(),
+                    help="texture copies made at the same time (1: one by one)")
     args = ap.parse_args()
 
     out_dir = os.path.abspath(args.out_dir)
@@ -1433,12 +1436,24 @@ def main():
             drawn.setdefault(m["rf2_material"], m)
     dim = albedo_caps(drawn, lums, p90, set(hard))
     data["dim_scale"] = dim
+
+    def card_scale(k):
+        return GRASS_CARD_TEXTURE if is_grass_card(drawn.get(k)) else dim.get(k, 1.0)
+
+    # The copies are independent and each is one long texconv run (-keepcoverage
+    # rebuilds every mip), so they are made side by side first. The loop below
+    # then records them in the same order, with the same messages, as when
+    # they were made one by one.
+    wanted = list(dict.fromkeys((disk_of[k], ac_of[k], card_scale(k)) for k in hard))
+    copies = dict(zip(wanted, ordered_map(
+        lambda key, t: coverage_copy(key[0], key[1], tex_dir, t, args.texconv,
+                                     rgb_scale=key[2]),
+        wanted, args.jobs, tmp)))
     for k in hard:
-        scale = GRASS_CARD_TEXTURE if is_grass_card(drawn.get(k)) else dim.get(k, 1.0)
+        scale = card_scale(k)
         key = (disk_of[k], ac_of[k], scale)
         if key not in made:
-            made[key] = coverage_copy(disk_of[k], ac_of[k], tex_dir, tmp,
-                                      args.texconv, rgb_scale=scale)
+            made[key] = copies[key]
             if scale != 1.0:
                 print("   %-18s %s texture x%.2f" % (
                     k[:18], "grass card" if k not in dim else "bright cut-out", scale))
@@ -1448,17 +1463,28 @@ def main():
     # The rest of the over-bright materials: a darkened copy of their diffuse.
     data["dim_tex"] = {}
     dimmed = {}
-    for k, scale in sorted(dim.items()):
+
+    def dim_key(k, scale):
         if k in hard:
-            continue
-        m = drawn[k]
-        tx = m["textures"].get("txDiffuse")
+            return None
+        tx = drawn[k]["textures"].get("txDiffuse")
         disk = files.get(tx, tx) if tx else None
         if not disk or not os.path.exists(os.path.join(tex_dir, disk)):
+            return None
+        return (disk, scale)
+
+    # Side by side for the same reason as the cut-out copies above.
+    wanted = list(dict.fromkeys(
+        key for key in (dim_key(k, s) for k, s in sorted(dim.items())) if key))
+    copies = dict(zip(wanted, ordered_map(
+        lambda key, t: dim_copy(key[0], key[1], tex_dir, t, args.texconv),
+        wanted, args.jobs, tmp)))
+    for k, scale in sorted(dim.items()):
+        key = dim_key(k, scale)
+        if key is None:
             continue
-        key = (disk, scale)
         if key not in dimmed:
-            dimmed[key] = dim_copy(disk, scale, tex_dir, tmp, args.texconv)
+            dimmed[key] = copies[key]
         if dimmed[key]:
             data["dim_tex"][k] = dimmed[key]
     if dim:

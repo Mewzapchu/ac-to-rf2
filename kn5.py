@@ -47,7 +47,8 @@ class Node:
     __slots__ = ('type', 'name', 'active', 'matrix', 'children', 'parent',
                  'material_id', 'vertex_count', 'index_count', 'layer',
                  'lod_in', 'lod_out', 'center', 'radius', 'cast_shadows',
-                 'visible', 'transparent', 'renderable', 'verts', 'uvs', 'normals', 'indices')
+                 'visible', 'transparent', 'renderable',
+                 '_verts', '_uvs', '_normals', '_indices', 'raw')
     def __init__(self):
         self.children = []
         self.parent = None
@@ -55,10 +56,46 @@ class Node:
         self.material_id = None
         self.vertex_count = 0
         self.index_count = 0
+        self.raw = None
         self.verts = None
         self.uvs = None
         self.normals = None
         self.indices = None
+
+
+# Geometry is decoded from the file the first time it is asked for, not on
+# load. As Python tuples it takes about 12 times its size on disk, and the
+# split geometry stage has every Blender load every model but export only its
+# own share: decoding it all put each of six Blenders at 3.8 GB on Laguna.
+# The values are unpacked from the same bytes in the same way either way.
+def _lazy(slot, unpack):
+    def get(self):
+        v = getattr(self, slot)
+        if v is None and self.raw is not None:
+            v = unpack(*self.raw)
+            setattr(self, slot, v)
+            if all(getattr(self, s) is not None for s in _GEOMETRY_SLOTS):
+                self.raw = None         # all decoded: let go of the file
+        return v
+
+    def put(self, v):
+        setattr(self, slot, v)
+    return property(get, put)
+
+
+def _vecs(fmt, at):
+    def unpack(d, vp, count, stride, ip, icount):
+        return [struct.unpack_from(fmt, d, vp + i * stride + at) for i in range(count)]
+    return unpack
+
+
+_GEOMETRY_SLOTS = ('_verts', '_uvs', '_normals', '_indices')
+# position 3f, normal 3f, uv 2f, tangent 3f
+Node.verts = _lazy('_verts', _vecs('<3f', 0))
+Node.normals = _lazy('_normals', _vecs('<3f', 12))
+Node.uvs = _lazy('_uvs', _vecs('<2f', 24))
+Node.indices = _lazy('_indices', lambda d, vp, count, stride, ip, icount:
+                     struct.unpack_from('<%dH' % icount, d, ip))
 
 
 def placement_matrix(position, rotation):
@@ -109,8 +146,9 @@ def _uv_span_ratio(n):
 def unfold_vertex_data(kn5):
     """Undo the scrambled UV and normal signs described above, if present."""
     import statistics
+    # From the counts, which say the same as the lists without decoding them.
     meshes = [n for n in kn5.walk()
-              if n.type in (2, 3) and n.uvs and n.indices and len(n.indices) >= 30]
+              if n.type in (2, 3) and n.vertex_count and n.index_count >= 30]
     if not meshes:
         return False
     sample = meshes[:: max(1, len(meshes) // 200)]
@@ -228,23 +266,13 @@ class KN5:
             n.vertex_count = r.u32()
             # position 3f, normal 3f, uv 2f, tangent 3f
             stride = 44 if n.type == 2 else 76
-            if self.geometry:
-                raw = r.d[r.p:r.p + n.vertex_count * stride]
-                r.skip(n.vertex_count * stride)
-                n.verts = [struct.unpack_from('<3f', raw, i * stride)
-                           for i in range(n.vertex_count)]
-                n.uvs = [struct.unpack_from('<2f', raw, i * stride + 24)
-                         for i in range(n.vertex_count)]
-                n.normals = [struct.unpack_from('<3f', raw, i * stride + 12)
-                             for i in range(n.vertex_count)]
-            else:
-                r.skip(n.vertex_count * stride)
+            vp = r.p
+            r.skip(n.vertex_count * stride)
             n.index_count = r.u32()
             if self.geometry:
-                n.indices = struct.unpack_from('<%dH' % n.index_count, r.d, r.p)
-                r.skip(n.index_count * 2)
-            else:
-                r.skip(n.index_count * 2)
+                # Where to decode from when asked (see _lazy).
+                n.raw = (r.d, vp, n.vertex_count, stride, r.p, n.index_count)
+            r.skip(n.index_count * 2)
             n.material_id = r.u32()
             n.layer = r.u32()
             n.lod_in = r.f32()

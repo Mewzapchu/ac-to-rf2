@@ -994,3 +994,39 @@ which is BLACK, so the asphalt's specular was zeroed. The asphalt under the
 rubber now gets AC's actual mask (txDiffuse alpha, mean 0.41) as its spec map
 (road_spec_map -> two_stage["spec"]), and spec_mask is not applied on top.
 Grass cards x0.8.
+
+## 2026-10-31: builds run side by side (--jobs)
+Task Manager showed Blender and Python at 8% each on a 12-thread CPU: one core.
+Measured on Spa (13 min one at a time): steps 1-3 3.5 min, AI line and
+cameras 0.5 min, Blender 9 min (70%), finalize 1 s.
+- texconv is single threaded: a 4096 BC3 with -keepcoverage took 16.1 s of CPU
+  in 14.9 s; four at once finished in 16 s instead of ~60. In bake_layers 140
+  of 172 s (Laguna, profiled) was waiting on texconv, 97 s of it the 12
+  cut-out copies. Those and the darkened copies, and fix_textures' per-file
+  conversions, now run in a pool (parallel.ordered_map), each job in its own
+  scratch folder (Laguna's trees go out at alpha 51 and 77 from one source,
+  and the helpers name temporaries after the source). Results are recorded in
+  the original order, so material_map.json and the log are unchanged.
+- Blender: N processes (--shard i/N). Every one walks every mesh, so names and
+  order are a single run's, and exports a share chosen greedily by measured
+  cost: 0.08-0.14 s per mesh plus 1.2-2.4 s per 10k triangles (fitted to the
+  gmt timestamps of Spa, Silverstone and Nagao), i.e. a mesh weighs its
+  triangles + 700. Each writes to its own folder, because the stage finds what
+  the exporter wrote by diffing its output folder. build_track merges them in
+  single-run order. Reading the models in every Blender costs 10.5 s on Spa.
+- Memory: the first try took six Blenders to 3.8 GB each and the machine to
+  0.2 GB free. kn5 decoded every vertex into Python tuples (~12x the file),
+  and a finished model stayed alive (parent/child cycles wait for the cycle
+  collector): all ten Laguna files at once, 3.3 GB. Geometry is now decoded on
+  first use (kn5._lazy, identical values on all 17 Laguna and Nagao files,
+  Nagao's unfold included) and blender_stage frees each model with
+  gc.collect(). Now 1.6 GB per Blender (Laguna), 1.4 (Spa). default_jobs caps
+  jobs at free memory / 2.5 GB.
+- Result, 6 jobs: Laguna 14.5 -> 6.9 min (Blender 684 -> 236 s), Spa 13 -> 4.5
+  min. Textures, material map, scene, GDB, AIW, cameras: byte identical. A few
+  gmts differ (Laguna 3-4 of 1124, Spa 8 of 1393), in the last bit of some
+  tangents and in a 3-float vertex field that holds garbage (NaN neighbours,
+  -3e19, 1e-45) in the single-run file itself: the exporter reads memory it
+  never wrote on degenerate vertices. Two single runs of Laguna differ in the
+  same way (bld_tower, toilettes, vehicles), so it is not the split.
+- --jobs 1 runs the old path: one Blender, no shard, conversions one by one.

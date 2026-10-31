@@ -24,7 +24,7 @@ for %%F in ("%~1\models_*.ini") do (
 )
 :run
 echo.
-echo Converting "%~nx1"  -- this takes 10 minutes to over an hour, Blender does most of it.
+echo Converting "%~nx1"  -- this takes about 5 to 15 minutes, Blender does most of it.
 echo.
 if defined LAYOUT (
   python "%HERE%build_track.py" "%~1" --install "%RF2%" --layout "%LAYOUT%"
