@@ -5,13 +5,20 @@ rem left in out\<track>\rf2\<track>: copy it into ModDev\Locations on any
 rem machine with rF2.
 rem
 rem For a track with several layouts, drag the folder and then type the layout
-rem when asked (for example: touristenfahrten). Press Enter for the default.
+rem when asked (for example: gp). Press Enter for the default, if it has one.
 setlocal
 set "HERE=%~dp0"
-rem rFactor 2 is found in whichever Steam library it is installed in.
-for /f "delims=" %%L in ('python "%HERE%steam_paths.py" --locations') do set "RF2=%%L"
 if "%~1"=="" (
   echo Drag an Assetto Corsa track folder onto convert.bat.
+  pause
+  exit /b 1
+)
+rem Windows can put a "python" on PATH that only opens the Microsoft Store, so
+rem run it rather than just looking for it.
+python -c "import sys" >nul 2>nul
+if errorlevel 1 (
+  echo Python was not found. Install Python 3.10 or newer from python.org and
+  echo tick "Add python.exe to PATH" in the installer, then try again.
   pause
   exit /b 1
 )
@@ -19,7 +26,7 @@ set "LAYOUT="
 for %%F in ("%~1\models_*.ini") do (
   echo This track has layouts:
   for %%G in ("%~1\models_*.ini") do echo    %%~nG
-  set /p LAYOUT="Layout (the part after models_, Enter for default): "
+  set /p LAYOUT="Layout (the part after models_, Enter for the default): "
   goto :run
 )
 :run
@@ -27,13 +34,18 @@ echo.
 echo Converting "%~nx1"  -- this takes about 5 to 15 minutes, Blender does most of it.
 echo.
 if defined LAYOUT (
-  python "%HERE%build_track.py" "%~1" --install "%RF2%" --layout "%LAYOUT%"
+  python "%HERE%build_track.py" "%~1" --install auto --layout "%LAYOUT%"
 ) else (
-  python "%HERE%build_track.py" "%~1" --install "%RF2%"
+  python "%HERE%build_track.py" "%~1" --install auto
 )
-echo.
-echo Done. Installed into "%RF2%"
+if errorlevel 1 (
+  echo.
+  echo Conversion FAILED. Read the messages above.
+  pause
+  exit /b 1
+)
 set "TRACK=%~nx1"
 if defined LAYOUT set "TRACK=%~nx1_%LAYOUT%"
-echo A copy of the track folder is in "%HERE%out\%TRACK%\rf2\%TRACK%".
+echo.
+echo Done. A copy of the track folder is in "%HERE%out\%TRACK%\rf2\%TRACK%".
 pause

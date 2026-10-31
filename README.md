@@ -7,7 +7,17 @@ present.
 
 The converter is generic: it reads what each AC track declares rather than using
 per-track hacks. It has been tested on Silverstone, Spa, Laguna Seca and Highlands
-(drift layout).
+(drift layout), and on two mod tracks: Wuhu Town, and Nagao in part (see
+[Scrambled (protected) mod tracks](#scrambled-protected-mod-tracks)).
+
+| | |
+|---|---|
+| ![Spa-Francorchamps, Eau Rouge](docs/screenshots/spa_eau_rouge.jpg) | ![Silverstone GP in the evening sun](docs/screenshots/silverstone_sunset.jpg) |
+| Spa-Francorchamps, Eau Rouge | Silverstone GP, evening sun |
+| ![Highlands, drift layout](docs/screenshots/highlands.jpg) | ![Nagao, a mod track](docs/screenshots/nagao.jpg) |
+| Highlands, drift layout | Nagao (mod track) |
+
+<sub>Converted tracks in rFactor 2's Developer Mode, whose editor menu shows on the left.</sub>
 
 > **Personal use only.** A converted track still contains the original track's
 > models and textures. Do not redistribute converted tracks unless you have the
@@ -24,21 +34,25 @@ per-track hacks. It has been tested on Silverstone, Spa, Laguna Seca and Highlan
 | [Assetto Corsa](https://store.steampowered.com/app/244210/Assetto_Corsa/) | any | Steam. Provides the tracks to convert and `system/data/surfaces.ini` |
 | [rFactor 2](https://store.steampowered.com/app/365960/rFactor_2/) | current Steam build | Steam. Includes ModDev, `texconv.exe` and the GMT exporter add-on |
 | [Python](https://www.python.org/downloads/windows/) | 3.10 or newer | python.org. Tick **"Add python.exe to PATH"** in the installer |
-| [NumPy](https://numpy.org/install/) | 1.24 or newer | `pip install numpy` |
-| [Blender](https://download.blender.org/release/Blender3.6/) | **3.6 LTS** | blender.org release archive. The rF2 exporter add-on targets 3.6 |
-| rF2 GMT exporter add-on (`io_rf2_gmt_release`) | ships with rF2 | `rFactor 2\Support\Tools\Plugins\io_rf2_gmt_release` |
+| [NumPy](https://numpy.org/install/) | 1.24 or newer | `python -m pip install numpy` |
+| [Blender](https://download.blender.org/release/Blender3.6/) | **3.6 LTS** | blender.org release archive. The rF2 add-on supports Blender 3.3 to 3.6; the converter is tested with 3.6 |
+| rF2 GMT exporter add-on (`io_rf2_gmt_release`) | 24.3.9 tested | **Separate download, not included with rF2:** Studio-397 forum thread [Blender rFactor2 Export Scripts](https://forum.studio-397.com/index.php?threads/blender-rfactor2-export-scripts.74821/) |
 | `texconv.exe` | ships with rF2 | `rFactor 2\Support\Tools\MapConverter\texconv.exe` |
 | [Custom Shaders Patch](https://acstuff.club/patch/) | optional | acstuff.club. Used only for its per-track config (material tweaks, GrassFX) when installed |
 
 ### Default paths
 
 **Assetto Corsa and rFactor 2** are found automatically in whichever Steam
-library they are installed in, on any drive (read from Steam's
+library they are installed in, on any drive, wherever Steam itself is installed
+(Steam's folder is read from the Windows registry, its libraries from
 `libraryfolders.vdf`). To see what was found, run:
 
 ```
 python steam_paths.py
 ```
+
+If a game is somewhere Steam doesn't list, give its folder to `build_track.py`
+with `--rf2 "<rFactor 2 folder>"` or `--ac "<assettocorsa folder>"`.
 
 **Blender** is expected at its default location:
 
@@ -56,23 +70,34 @@ full paths.
 
 ## Setup
 
-1. **Install Python and NumPy**
+1. **Install Python and NumPy.** After installing Python, open a command prompt
+   and run:
    ```
-   pip install numpy
+   python -m pip install numpy
    ```
 2. **Install Blender 3.6 LTS** to its default folder.
 3. **Install the rF2 exporter add-on in Blender**
-   1. Copy the folder
-      `rFactor 2\Support\Tools\Plugins\io_rf2_gmt_release`
-      into `%APPDATA%\Blender Foundation\Blender\3.6\scripts\addons\`.
-   2. Start Blender, open *Edit > Preferences > Add-ons*, search for "rF2" and tick it.
+   1. Download the add-on zip (`io_rf2_gmt_release_....zip`) from the Studio-397
+      forum thread
+      [Blender rFactor2 Export Scripts](https://forum.studio-397.com/index.php?threads/blender-rfactor2-export-scripts.74821/).
+      Don't unzip it.
+   2. Start Blender, open *Edit > Preferences > Add-ons*, click **Install...**
+      and pick the zip.
 
-   The converter turns the add-on on by itself on every run, so this is only
-   needed once.
-4. **Get the code**
+   That's all: the converter switches the add-on on by itself on every run.
+4. **Get the code.** Either click **Code > Download ZIP** on the GitHub page and
+   extract it anywhere, or with git:
    ```
    git clone https://github.com/Mewzapchu/ac-to-rf2.git
    ```
+5. **Check the setup.** In the converter's folder, run:
+   ```
+   python check_setup.py
+   ```
+   It lists each requirement as `ok`, or as `PROBLEM` with what to do about it,
+   and ends with `all good` when everything is in place. Every conversion runs
+   the same check first, so a missing piece stops it within seconds instead of
+   minutes into a build.
 
 ---
 
@@ -84,7 +109,11 @@ Drag the AC track folder onto **`convert.bat`**. For example, drag
 `...\assettocorsa\content\tracks\ks_silverstone`.
 
 If the track has several layouts, the converter lists them and asks which one to
-build. Press Enter for the default layout.
+build. Type the part after `models_` (e.g. `gp`), or press Enter for the default
+layout. Some tracks (Silverstone, Highlands) have no default, and the converter
+says so.
+
+If the conversion fails, the window says so and keeps the messages on screen.
 
 **How long it takes:** about **5–7 minutes** per track on a 12-thread CPU
 (measured: Spa 4.5 minutes, Laguna Seca 7). Blender does most of the work and the
@@ -95,8 +124,7 @@ One job at a time (`--jobs 1`) it is about **11–15 minutes**.
 The result is:
 
 - installed into `rFactor 2\ModDev\Locations\<track>`
-- copied to `out\<track>
-f2\<track>`: to use the track on another PC, copy that
+- copied to `out\<track>\rf2\<track>`: to use the track on another PC, copy that
   folder (zip it yourself if you like) into that PC's `ModDev\Locations`
 
 **Disk space:** the build also leaves its working files in `out\<track>\` inside
@@ -121,6 +149,7 @@ Useful options:
 | `--skip-geometry` | Reuse the meshes from the previous run and redo only the later steps (much faster) |
 | `--jobs <n>` | How many Blenders and texture conversions run side by side. The default is half your CPU threads, at most 6, and fewer if free memory is short (about 2.5 GB each). `--jobs 1` runs everything one at a time, as older versions did |
 | `--blender <path>` | Use a Blender that is not in the default folder |
+| `--rf2 <folder>` / `--ac <folder>` | Use an rFactor 2 or Assetto Corsa installation that Steam doesn't list |
 
 ### Checking an install
 
@@ -192,11 +221,13 @@ for screenshots of these dialogs.
 
 Other files:
 
+- `check_setup.py`: checks that everything a conversion needs is installed (run first by every build)
 - `kn5.py`: reader for AC's kn5 model format
 - `steam_paths.py`: finds Assetto Corsa, rFactor 2 and `texconv.exe` in your Steam libraries
 - `parallel.py`: how many jobs run side by side (`--jobs`), and the helper that runs texture conversions in parallel
 - `probe_*.py`: diagnostic tools used while working out the rF2 formats
 - `NOTES.md`: a running log of every finding, with the measurement behind each decision. Read this before changing how materials are translated.
+- `AGENTS.md`: how to work on the code, written for AI coding assistants (and useful for people too)
 
 ---
 

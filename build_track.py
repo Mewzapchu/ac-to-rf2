@@ -205,7 +205,17 @@ def main():
                     help="Blenders and texture conversions run side by side "
                          "(default %d here; 1 runs everything one at a time, as "
                          "before)" % default_jobs())
+    ap.add_argument("--rf2", default=None,
+                    help="the rFactor 2 folder, if Steam does not list it")
+    ap.add_argument("--ac", default=None,
+                    help="the assettocorsa folder, if Steam does not list it")
     args = ap.parse_args()
+    # Every step is a process of its own that finds the games through
+    # steam_paths, which reads these, so they are set before anything imports it.
+    if args.rf2:
+        os.environ["AC2RF2_RF2_DIR"] = os.path.abspath(args.rf2)
+    if args.ac:
+        os.environ["AC2RF2_AC_DIR"] = os.path.abspath(args.ac)
     if args.install == "auto":
         import steam_paths
         args.install = steam_paths.LOCATIONS
@@ -216,7 +226,13 @@ def main():
     out = os.path.join(HERE, "out", track)
     py = sys.executable
     lay = ["--layout", args.layout] if args.layout else []
-    print("converting %s" % track)
+
+    import check_setup
+    reuse = args.skip_geometry and os.path.isdir(os.path.join(out, "gmt"))
+    if not check_setup.check(args.track_dir, args.layout, args.blender,
+                             args.install, need_blender=not reuse):
+        raise SystemExit(1)
+    print("\nconverting %s" % track)
 
     step(1, "model, surfaces and textures")
     run([py, "convert_track.py", args.track_dir, "--textures"] + lay)

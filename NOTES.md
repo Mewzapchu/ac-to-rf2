@@ -1030,3 +1030,32 @@ cameras 0.5 min, Blender 9 min (70%), finalize 1 s.
   never wrote on degenerate vertices. Two single runs of Laguna differ in the
   same way (bld_tower, toilettes, vehicles), so it is not the split.
 - --jobs 1 runs the old path: one Blender, no shard, conversions one by one.
+
+## 2026-10-31: parallel builds checked on three more tracks; setup check
+- Silverstone gp 15 -> 4.9 min, Highlands drift 11 -> 4.8, Nagao uphill 12 ->
+  6.0, each compared with the single-Blender build of the same code. Everything
+  but the gmts is byte identical. Nagao: all 6738 gmts identical too.
+  Silverstone: 4 gmts differ, only in the normal and padding words of
+  degenerate vertices, which hold garbage (denormals, -1e18) in the
+  single-Blender file already. Highlands: the four pub_lod2_* meshes differ in
+  500-700 words each (normals, tangents). A second single-Blender run differs
+  from the first in the same four files by the same amount, and the 961 other
+  gmts it wrote are identical, so it is the exporter, not the split.
+- The rF2 Blender add-on does not come with rF2: Support\Tools\Plugins holds
+  only the 3ds Max plugins. It is a download from the Studio-397 forum thread
+  "Blender rFactor2 Export Scripts" (io_rf2_gmt_release_2400309.zip, 24.3.9),
+  compiled for Python 3.10 (cpython-310 .pyc), so Blender 4.1+ cannot load it.
+  The README said it shipped with rF2.
+- Without --layout, a track whose layouts all live in models_<name>.ini (no
+  models.ini, no ai\ folder: Silverstone, Highlands, Nagao) fell back to
+  <track>.kn5 alone (layout_models), and a mistyped --layout did the same,
+  silently. convert.bat offered Enter for "the default" on exactly those
+  tracks. check_setup.py now refuses both, with the layout list.
+- convert.bat printed "Done. Installed" whatever build_track returned; it now
+  checks the exit code. A missing NumPy, Blender or add-on used to fail at
+  step 3 or 6, minutes in; check_setup.py finds them in ~3.5 s (it asks
+  Blender itself to enable the add-on, wherever that Blender keeps it).
+- Steam's own folder comes from HKCU\Software\Valve\Steam\SteamPath (stored
+  lower case; realpath gives the real case), so a Steam installed off
+  C:\Program Files (x86) is found. --rf2 / --ac (AC2RF2_RF2_DIR /
+  AC2RF2_AC_DIR) name a game folder outright.
