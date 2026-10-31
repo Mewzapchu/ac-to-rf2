@@ -16,8 +16,7 @@ import struct
 import argparse
 import subprocess
 
-TEXCONV = (r"C:\Program Files (x86)\Steam\steamapps\common\rFactor 2"
-           r"\Support\Tools\MapConverter\texconv.exe")
+from steam_paths import TEXCONV  # in whichever Steam library has rF2
 BLOCK = (b"DXT1", b"DXT3", b"DXT5", b"BC4U", b"BC5U", b"ATI1", b"ATI2")
 
 # Rebuilding a block compressed texture means decoding and recompressing it, so

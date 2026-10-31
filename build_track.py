@@ -96,7 +96,9 @@ def write_clear_texture(path):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("track_dir")
-    ap.add_argument("--install", default=None)
+    ap.add_argument("--install", default=None,
+                    help='an rF2 ModDev\\Locations folder, or "auto" to find it '
+                         'in your Steam libraries')
     ap.add_argument("--hour", default="12:00")
     ap.add_argument("--bake-size", type=int, default=12288)
     ap.add_argument("--grain", default="2")
@@ -113,6 +115,9 @@ def main():
     ap.add_argument("--skip-geometry", action="store_true",
                     help="reuse the meshes already exported")
     args = ap.parse_args()
+    if args.install == "auto":
+        import steam_paths
+        args.install = steam_paths.LOCATIONS
 
     track = os.path.basename(os.path.abspath(args.track_dir).rstrip("\\/"))
     if args.layout:

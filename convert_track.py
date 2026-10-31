@@ -13,6 +13,7 @@ import json
 import argparse
 import configparser
 import shutil
+import steam_paths
 import struct
 from collections import OrderedDict, defaultdict
 
@@ -1030,14 +1031,12 @@ def main():
     ap.add_argument("track_dir")
     ap.add_argument("-o", "--out", default=None)
     ap.add_argument("--ac-root",
-                    default=r"C:\Program Files (x86)\Steam\steamapps\common\assettocorsa")
+                    default=steam_paths.AC_DIR)
     ap.add_argument("--textures", action="store_true")
     ap.add_argument("--layout", default=None,
                     help="for a multi-layout track: the part after models_ in models_<layout>.ini")
     ap.add_argument("--tdf-template",
-                    default=os.path.join(
-                        r"C:\Program Files (x86)\Steam\steamapps\common",
-                        "rFactor 2", "ModDev", "Locations", "terrain.tdf"),
+                    default=os.path.join(steam_paths.LOCATIONS, "terrain.tdf"),
                     help="known-good terrain file to patch grip values into")
     args = ap.parse_args()
 

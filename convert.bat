@@ -8,7 +8,8 @@ rem For a track with several layouts, drag the folder and then type the layout
 rem when asked (for example: touristenfahrten). Press Enter for the default.
 setlocal
 set "HERE=%~dp0"
-set "RF2=C:\Program Files (x86)\Steam\steamapps\common\rFactor 2\ModDev\Locations"
+rem rFactor 2 is found in whichever Steam library it is installed in.
+for /f "delims=" %%L in ('python "%HERE%steam_paths.py" --locations') do set "RF2=%%L"
 if "%~1"=="" (
   echo Drag an Assetto Corsa track folder onto convert.bat.
   pause

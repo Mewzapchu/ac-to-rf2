@@ -31,19 +31,25 @@ per-track hacks. It has been tested on Silverstone, Spa, Laguna Seca and Highlan
 
 ### Default paths
 
-The scripts assume the standard Steam and Blender locations:
+**Assetto Corsa and rFactor 2** are found automatically in whichever Steam
+library they are installed in, on any drive (read from Steam's
+`libraryfolders.vdf`). To see what was found, run:
 
 ```
-C:\Program Files (x86)\Steam\steamapps\common\assettocorsa
-C:\Program Files (x86)\Steam\steamapps\common\rFactor 2
+python steam_paths.py
+```
+
+**Blender** is expected at its default location:
+
+```
 C:\Program Files\Blender Foundation\Blender 3.6\blender.exe
 ```
 
-Only Python needs to be in PATH. Blender and `texconv.exe` are called by these
-full paths. If yours differ, pass `--blender "<path to blender.exe>"` to `build_track.py`.
-You can also edit the constants at the top of `build_track.py` (`BLENDER`),
-`bake_layers.py` and `fix_textures.py` (`TEXCONV`), and the `--ac-root` default
-in `convert_track.py`.
+If yours is elsewhere, pass `--blender "<path to blender.exe>"` to
+`build_track.py`, or edit `BLENDER` at the top of that file.
+
+Only Python needs to be in PATH. Blender and `texconv.exe` are called by their
+full paths.
 
 ---
 
@@ -87,7 +93,8 @@ the most. `--skip-geometry` reruns only the later steps in a few minutes.
 The result is:
 
 - installed into `rFactor 2\ModDev\Locations\<track>`
-- copied to `out\<track>f2\<track>`: to use the track on another PC, copy that
+- copied to `out\<track>
+f2\<track>`: to use the track on another PC, copy that
   folder (zip it yourself if you like) into that PC's `ModDev\Locations`
 
 **Disk space:** the build also leaves its working files in `out\<track>\` inside
@@ -99,13 +106,14 @@ Git ignores `out\`, so none of it is ever uploaded.
 ### From the command line
 
 ```
-python build_track.py "<AC track folder>" --install "C:\Program Files (x86)\Steam\steamapps\common\rFactor 2\ModDev\Locations"
+python build_track.py "<AC track folder>" --install auto
 ```
 
 Useful options:
 
 | Option | What it does |
 |---|---|
+| `--install auto` | Install into rF2's `ModDev\Locations`, found in your Steam libraries (or give the folder's path instead of `auto`) |
 | `--layout <name>` | Which layout of a multi-layout track: the part after `models_` in `models_<name>.ini` (e.g. `--layout gp`) |
 | `--hour HH:MM` | Session start time written into the GDB (default `12:00`; e.g. `18:30` for a low evening sun) |
 | `--skip-geometry` | Reuse the meshes from the previous run and redo only the later steps (much faster) |
@@ -182,6 +190,7 @@ for screenshots of these dialogs.
 Other files:
 
 - `kn5.py`: reader for AC's kn5 model format
+- `steam_paths.py`: finds Assetto Corsa, rFactor 2 and `texconv.exe` in your Steam libraries
 - `probe_*.py`: diagnostic tools used while working out the rF2 formats
 - `NOTES.md`: a running log of every finding, with the measurement behind each decision. Read this before changing how materials are translated.
 

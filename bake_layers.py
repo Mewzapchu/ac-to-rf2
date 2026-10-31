@@ -31,8 +31,7 @@ import subprocess
 
 import numpy as np
 
-TEXCONV = (r"C:\Program Files (x86)\Steam\steamapps\common\rFactor 2"
-           r"\Support\Tools\MapConverter\texconv.exe")
+from steam_paths import TEXCONV  # in whichever Steam library has rF2
 CHANNELS = ("R", "G", "B", "A")
 
 # Resizing or building mips, texconv filters colour weighted by alpha unless
