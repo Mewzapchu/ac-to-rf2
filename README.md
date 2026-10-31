@@ -86,7 +86,7 @@ full paths.
 
    That's all: the converter switches the add-on on by itself on every run.
 4. **Get the code.** Either click **Code > Download ZIP** on the GitHub page and
-   extract it anywhere, or with git:
+   extract it anywhere, get it on the releases page or with git:
    ```
    git clone https://github.com/Mewzapchu/ac-to-rf2.git
    ```
