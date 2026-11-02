@@ -1,5 +1,14 @@
 # Open list, 2026-09-28
 
+## Race-grid heading
+
+The generated `.AIW` stores start positions and headings in `[GRID]` as `Pos`
+and `Ori`. In `out\bannochbrae_snow\bannochbrae_snow.AIW`, grid 0 is at
+`(-90.553, -39.764, -0.528)` with `Ori=(0.000, 1.571, 0.000)`. Start headings need a 180-degree conversion. The generated grid entries now
+use the existing `face_out` conversion, as do pit entries. For this sample the
+heading changes from `1.571` to `-1.571`, leaving the measured position
+unchanged.
+
 The material and lighting translation is now in rF2's own terms rather than
 AC's, taken from Studio 397's Joesville: material colours at rF2's convention,
 scene ambient 126, sun 220, fog 50 to 5000. The compensation machinery that
