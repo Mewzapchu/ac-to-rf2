@@ -55,6 +55,15 @@ def layouts(track_dir):
 
 
 def check_track(rep, track_dir, layout):
+    if os.path.isfile(track_dir):
+        ext = os.path.splitext(track_dir)[1].lower()
+        if ext in (".rar", ".7z"):
+            rep.problem("%s is a %s archive" % (os.path.basename(track_dir), ext),
+                        "Extract it first (7-Zip or WinRAR) and give the converter "
+                        "the track folder. Only .zip files are extracted automatically.")
+        else:
+            rep.problem("%s is a file, not a track folder" % track_dir)
+        return
     if not os.path.isdir(track_dir):
         rep.problem("track folder not found: %s" % track_dir)
         return
@@ -203,6 +212,9 @@ def main():
     if not args.blender:
         from build_track import BLENDER
         args.blender = BLENDER
+    import track_zip
+    if args.track_dir and track_zip.is_zip(args.track_dir):
+        args.track_dir = track_zip.extract(args.track_dir)
     import steam_paths
     ok = check(args.track_dir, args.layout, args.blender, steam_paths.LOCATIONS)
     if ok:

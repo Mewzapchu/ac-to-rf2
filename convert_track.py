@@ -52,6 +52,16 @@ MIN_TRANSPARENT_PCT = 5.0
 # depth sorted against the scene, so it always paints over the trees. rF2
 # draws its own sky, so the panel is dropped rather than drawn wrongly.
 BACKDROP_RADIUS = 1000.0
+# ...unless it lies along the lap. AC tracks mark their rubber as decals, but
+# Lapwerks lays its rubber marks, patches and cracks as plain blended meshes,
+# and rubber that follows the whole lap is as big as any horizon. Filed as a
+# backdrop it was drawn opaque: near-black strips down the racing line. Every
+# real backdrop on seven tracks has at most 36% of itself within LAP_REACH of
+# the racing line (Nagao's flat tree wall beside the road); those overlays 100%.
+ALONG_LAP = 0.75
+LAP_REACH = 25.0
+# Real images rather than DDS; see texture_filenames.
+IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".bmp", ".gif")
 
 
 def texture_alpha_stats(kn5_paths):
@@ -210,10 +220,19 @@ def texture_filenames(names):
     Sanitising alone is not enough: Laguna Seca ships both
     "laguna_seca_terrain_4k.dds" and "laguna-seca-terrain-4k.dds", which
     collapse onto the same name and silently overwrite each other.
+
+    Images AC loads as they are (PNG, JPEG, BMP, GIF) get a .dds name, so
+    fix_textures re-encodes them like an image hidden behind a .dds name: block
+    compressed with a full mip chain. Left as PNG they had no mips, so a
+    track's distant tarmac kept every light stone as a sharp dot
+    (td_helvetic_national_circuit: all 82 textures PNG), and every later step
+    that reads DDS skipped them, tree cut-outs included.
     """
     out, taken = {}, set()
     for name in names:
         base, ext = os.path.splitext(name)
+        if ext.lower() in IMAGE_EXTENSIONS:
+            ext = ".dds"
         cand = safe(base) + ext
         if cand.lower() in taken:
             i = 2
@@ -279,6 +298,23 @@ def world_points(node, samples=300):
                     cx * m[0][1] + cy * m[1][1] + cz * m[2][1] + m[3][1],
                     cx * m[0][2] + cy * m[1][2] + cz * m[2][2] + m[3][2]))
     return out or None
+
+
+def lap_share(points, line_pts, reach=LAP_REACH):
+    """Share of world points within reach metres of the racing line (ground plane)."""
+    if not points or not line_pts:
+        return 0.0
+    cells = defaultdict(list)
+    for q in line_pts:
+        cells[(int(q[0] // reach), int(q[2] // reach))].append(q)
+    close = 0
+    for x, _y, z in points:
+        cx, cz = int(x // reach), int(z // reach)
+        if any((q[0] - x) ** 2 + (q[2] - z) ** 2 <= reach * reach
+               for i in (-1, 0, 1) for j in (-1, 0, 1)
+               for q in cells.get((cx + i, cz + j), ())):
+            close += 1
+    return close / float(len(points))
 
 
 def drop_coplanar_duplicates(rows, points, gap=0.01):
@@ -1269,6 +1305,16 @@ def main():
     if gfx:
         print("   CSP GrassFX grows on: %s" % ", ".join(sorted(
             {m["ac_material"] for m in mesh_rows if m["grass_fx"]})))
+    # Road dressing laid along the lap is not a horizon (ALONG_LAP). Only a
+    # mesh that needed blending could be a backdrop, so it goes back to that.
+    along = [m for m in mesh_rows if m["backdrop"]
+             and lap_share(world_pts.get(m["mesh"]), line_pts) >= ALONG_LAP]
+    for m in along:
+        m["backdrop"] = False
+        m["needs_blend"] = True
+    if along:
+        print("   blended like AC, not backdrops (they lie along the lap): %s"
+              % ", ".join(m["mesh"] for m in along))
     # The far mountains are a painted strip whose sky is clear. They used to
     # be cut by deleting transparent triangles, because the alpha test flag
     # was unknown; a triangle straddling the ridge stayed whole and its sky,
@@ -1377,7 +1423,12 @@ def main():
 
     if args.textures:
         tex_dir = os.path.join(out_dir, "textures")
-        os.makedirs(tex_dir, exist_ok=True)
+        # From empty: finalize installs whatever is in here, so a texture left
+        # by an earlier build went into rF2 too, and could stand in for one
+        # this build failed to make (Helvetic: 82 PNGs beside their new DDS).
+        if os.path.isdir(tex_dir):
+            shutil.rmtree(tex_dir)
+        os.makedirs(tex_dir)
         print("extracted %d textures" % extract_textures(kn5_paths, tex_dir, tex_names))
         n = loose_textures(track_dir, tex_dir, tex_names)
         if n:

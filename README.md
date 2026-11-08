@@ -108,6 +108,11 @@ full paths.
 Drag the AC track folder onto **`convert.bat`**. For example, drag
 `...\assettocorsa\content\tracks\ks_silverstone`.
 
+You can also drag the track's **`.zip`** straight from your downloads. The
+converter extracts it into `out\_zips\` (not into Assetto Corsa) and converts
+the track inside. A zip with several tracks in it, or a `.rar` or `.7z`, has to
+be extracted by hand first; the converter says so.
+
 If the track has several layouts, the converter lists them and asks which one to
 build. Type the part after `models_` (e.g. `gp`), or press Enter for the default
 layout. Some tracks (Silverstone, Highlands) have no default, and the converter
@@ -129,6 +134,7 @@ The result is:
 
 **Disk space:** the build also leaves its working files in `out\<track>\` inside
 this folder: extracted textures, meshes and logs, often several GB per track.
+Tracks converted from a zip also keep their extracted copy in `out\_zips\`.
 The installed track in rF2 doesn't need them. Delete `out\` whenever you like
 (copy out any `rf2\<track>` folder you want to keep first); you only lose the ability to rerun a track's later steps with `--skip-geometry`.
 Git ignores `out\`, so none of it is ever uploaded.
@@ -136,7 +142,7 @@ Git ignores `out\`, so none of it is ever uploaded.
 ### From the command line
 
 ```
-python build_track.py "<AC track folder>" --install auto
+python build_track.py "<AC track folder or .zip>" --install auto
 ```
 
 Useful options:
@@ -222,6 +228,7 @@ for screenshots of these dialogs.
 Other files:
 
 - `check_setup.py`: checks that everything a conversion needs is installed (run first by every build)
+- `track_zip.py`: finds the track in a downloaded `.zip` and extracts it into `out\_zips\`
 - `kn5.py`: reader for AC's kn5 model format
 - `steam_paths.py`: finds Assetto Corsa, rFactor 2 and `texconv.exe` in your Steam libraries
 - `parallel.py`: how many jobs run side by side (`--jobs`), and the helper that runs texture conversions in parallel

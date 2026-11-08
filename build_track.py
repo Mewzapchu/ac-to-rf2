@@ -219,6 +219,9 @@ def main():
     if args.install == "auto":
         import steam_paths
         args.install = steam_paths.LOCATIONS
+    import track_zip
+    if track_zip.is_zip(args.track_dir):
+        args.track_dir = track_zip.extract(args.track_dir)
 
     track = os.path.basename(os.path.abspath(args.track_dir).rstrip("\\/"))
     if args.layout:

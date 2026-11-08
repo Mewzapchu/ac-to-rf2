@@ -1059,3 +1059,46 @@ cameras 0.5 min, Blender 9 min (70%), finalize 1 s.
   lower case; realpath gives the real case), so a Steam installed off
   C:\Program Files (x86) is found. --rf2 / --ac (AC2RF2_RF2_DIR /
   AC2RF2_AC_DIR) name a game folder outright.
+
+## 2026-11-07: Lapwerks tracks (td_helvetic_national_circuit)
+- It came as a zip in Downloads, not extracted, which is why it would not
+  convert: the converter needs the track folder (now in AC's content\tracks,
+  as the track's own README says).
+- Every texture is a real PNG (82). fix_textures only looked at .dds names,
+  so they went to rF2 as PNG, with no mip chain, and every step that reads DDS
+  skipped them: "0 hard cut-outs" although six leaf materials are alpha
+  tested. The asphalt is a 1024x1024 PNG of dark tarmac (mean 39) with light
+  stones (up to 149), one repeat per 15.6 m of road, so 1.5 cm a texel and
+  stones of 1.5-4.5 cm. Without mips each stays a sharp dot however far away.
+  texture_filenames now gives real PNG/JPEG/BMP/GIF images a .dds name, so
+  fix_textures re-encodes them (BC3, full mips) like an image hidden behind a
+  .dds name: 82 converted, 6 cut-outs, pro_asphalt.dds 11 mips.
+- Its rubber marks, a road patch and the cracks are blended meshes with depth
+  mode 0 (not decals) and radius ~1030 m (they follow the lap), so the
+  backdrop rule took four of them for horizons: drawn opaque, the rubber
+  (RGB 4, soft alpha) would be near-black strips. Flatness cannot tell them
+  apart: Laguna's horizon is a cone tilted 18 deg from flat (1.94 km radius at
+  the bottom, 2.37 km at the top, 140 m tall), upward 1.0 like the rubber.
+  Distance from the racing line can: within 25 m of it, real backdrops on
+  seven tracks 0-3.4% (Nagao's flat tree wall 36%), these overlays 100%. A
+  backdrop candidate with >= 75% along the lap is blended like AC instead.
+- Checked: step 1 on Spa, Laguna, Wuhu, Silverstone, Highlands and Nagao
+  writes the same material_map fields, scene, GDB and TDF as before; the one
+  difference is Laguna's lights1.png, now lights1.dds.
+- Step 4 (make_aiw) took ~7 of the 13 minutes on this 315 MB kn5, at 4 GB.
+- A zip is now converted straight away: track_zip.py extracts it into
+  out\_zips\<zip name>\ (reused while the zip is unchanged) and the track is
+  the shallowest folder holding .kn5 files (CSP keeps more in extension\;
+  __MACOSX copies are skipped). A pack of several tracks, a zip with no kn5
+  and a .rar/.7z are refused with a message. Tested on made-up zips of each
+  shape and on the Helvetic download through convert.bat.
+- make_aiw took AC's folder as three levels above the track, which is only
+  right inside content\tracks: a track anywhere else lost AC's global
+  surfaces.ini when picking drivable surfaces. It uses steam_paths.AC_DIR now,
+  like convert_track; Spa's and Silverstone's AIW are byte identical.
+- out\<track>\textures was never emptied, and finalize installs every file
+  in it: Helvetic's second build installed the first build's 82 PNGs beside
+  their new DDS (203 textures instead of 121). A stale file can also stand
+  in for a texture a build failed to make, so verify_install would not see
+  it missing. Step 1 now starts the folder from empty (tested: a planted
+  file is gone, 82 textures left).

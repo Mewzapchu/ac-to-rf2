@@ -685,8 +685,11 @@ def build(track_dir, out_path, layout):
     paths, layout_root, _warn = convert_track.layout_files(track_dir, layout)
     placed = convert_track.placements(track_dir, layout)
     print("reading %d model files" % len(paths))
-    ac_root = os.path.dirname(os.path.dirname(os.path.dirname(track_dir)))
-    surf = convert_track.load_surfaces(layout_root, ac_root)
+    # AC's own folder, wherever the track is. Three levels up from the track
+    # is only right inside content\tracks; a track converted from anywhere
+    # else (an extracted zip) lost AC's global surfaces.ini that way.
+    import steam_paths
+    surf = convert_track.load_surfaces(layout_root, steam_paths.AC_DIR)
     valid = {key.upper() for key, info in surf.items() if info["valid"]}
     print("drivable surface keys: %s" % ", ".join(sorted(valid)))
     starts, pits, road, solid = [], [], [], []

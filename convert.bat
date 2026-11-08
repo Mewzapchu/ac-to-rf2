@@ -1,15 +1,16 @@
 @echo off
-rem Drag an Assetto Corsa track folder onto this file to convert it to rFactor 2.
-rem It installs into rFactor 2\ModDev\Locations. A copy of the track folder is
-rem left in out\<track>\rf2\<track>: copy it into ModDev\Locations on any
-rem machine with rF2.
+rem Drag an Assetto Corsa track folder, or the zip it was downloaded as, onto
+rem this file to convert it to rFactor 2. It installs into
+rem rFactor 2\ModDev\Locations. A copy of the track folder is left in
+rem out\<track>\rf2\<track>: copy it into ModDev\Locations on any machine
+rem with rF2. A zip is extracted into out\_zips, not into Assetto Corsa.
 rem
-rem For a track with several layouts, drag the folder and then type the layout
-rem when asked (for example: gp). Press Enter for the default, if it has one.
+rem For a track with several layouts, type the layout when asked (for
+rem example: gp). Press Enter for the default, if it has one.
 setlocal
 set "HERE=%~dp0"
 if "%~1"=="" (
-  echo Drag an Assetto Corsa track folder onto convert.bat.
+  echo Drag an Assetto Corsa track folder or zip onto convert.bat.
   pause
   exit /b 1
 )
@@ -22,21 +23,34 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
+set "TRACKDIR=%~1"
+if /i not "%~x1"==".zip" goto :folder
+rem track_zip prints the extracted folder; its messages go to the screen.
+set "TRACKDIR="
+for /f "usebackq delims=" %%L in (`python "%HERE%track_zip.py" "%~1"`) do set "TRACKDIR=%%L"
+if not defined TRACKDIR (
+  echo.
+  echo Conversion FAILED. Read the messages above.
+  pause
+  exit /b 1
+)
+:folder
+for %%T in ("%TRACKDIR%") do set "TRACK=%%~nxT"
 set "LAYOUT="
-for %%F in ("%~1\models_*.ini") do (
+for %%F in ("%TRACKDIR%\models_*.ini") do (
   echo This track has layouts:
-  for %%G in ("%~1\models_*.ini") do echo    %%~nG
+  for %%G in ("%TRACKDIR%\models_*.ini") do echo    %%~nG
   set /p LAYOUT="Layout (the part after models_, Enter for the default): "
   goto :run
 )
 :run
 echo.
-echo Converting "%~nx1"  -- this takes about 5 to 15 minutes, Blender does most of it.
+echo Converting "%TRACK%"  -- this takes about 5 to 15 minutes, Blender does most of it.
 echo.
 if defined LAYOUT (
-  python "%HERE%build_track.py" "%~1" --install auto --layout "%LAYOUT%"
+  python "%HERE%build_track.py" "%TRACKDIR%" --install auto --layout "%LAYOUT%"
 ) else (
-  python "%HERE%build_track.py" "%~1" --install auto
+  python "%HERE%build_track.py" "%TRACKDIR%" --install auto
 )
 if errorlevel 1 (
   echo.
@@ -44,8 +58,7 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-set "TRACK=%~nx1"
-if defined LAYOUT set "TRACK=%~nx1_%LAYOUT%"
+if defined LAYOUT set "TRACK=%TRACK%_%LAYOUT%"
 echo.
 echo Done. A copy of the track folder is in "%HERE%out\%TRACK%\rf2\%TRACK%".
 pause
