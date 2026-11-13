@@ -9,11 +9,15 @@ AC world coordinates pass through the kn5 -> Blender -> gmt chain unchanged,
 verified by matching float values in an exported gmt, so no axis conversion is
 applied here.
 """
+import gc
 import os
 import math
 import struct
 import json
 import argparse
+import ctypes
+import sys
+from array import array
 
 import numpy as np
 
@@ -23,9 +27,45 @@ BINS = 144
 INSET = 0.55          # fraction of the road radius the path sits at
 SPACING = 6.0         # metres between waypoints
 SECTORS = 3
+LANE_SPACING = 4.5
+AI_BOUNDARY_MARGIN = -2.0
+START_LANE_HOLD_DISTANCE = 30.0
+START_LANE_BLEND_DISTANCE = 60.0
+START_GRID_MARGIN_DISTANCE = 15.0
 GARAGE_BACK = 6.0   # metres behind the pit box
 # Spawn every session on AC's start spots instead of behind the pit boxes.
 GARAGES_AT_GRID = True
+
+
+def _memory_status():
+    class MemoryStatus(ctypes.Structure):
+        _fields_ = [("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+
+    try:
+        status = MemoryStatus()
+        status.dwLength = ctypes.sizeof(status)
+        if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+            return "physical_memory=unavailable (GlobalMemoryStatusEx failed)"
+        gib = 1024.0 ** 3
+        return "physical_memory_available=%.2f GiB physical_memory_total=%.2f GiB" % (
+            status.ullAvailPhys / gib, status.ullTotalPhys / gib)
+    except (AttributeError, OSError) as exc:
+        return "physical_memory=unavailable (%s)" % exc
+
+
+def _memory_log(path, event, details=""):
+    if path is None:
+        return
+    with open(path, "a", encoding="utf-8") as f:
+        f.write("%s | %s | %s\n" % (event, details, _memory_status()))
 
 
 def mirror_pos(p):
@@ -78,6 +118,60 @@ def yaw_of(m):
     return math.atan2(m[8], m[10])
 
 
+class TriangleBuffer:
+    """Compact triangle records: (x,z) per corner, followed by three heights."""
+
+    def __init__(self):
+        self.data = array("d")
+
+    def __len__(self):
+        return len(self.data) // 9
+
+    def __iter__(self):
+        values = self.data
+        for i in range(0, len(values), 9):
+            yield (((values[i], values[i + 1]),
+                    (values[i + 2], values[i + 3]),
+                    (values[i + 4], values[i + 5])),
+                   (values[i + 6], values[i + 7], values[i + 8]))
+
+    def extend(self, records):
+        self.data.frombytes(records.tobytes())
+
+
+def mesh_triangles(node, matrix):
+    """Yield compact, world-space triangle records in bounded-size batches."""
+    if node.raw is not None:
+        data, vp, count, stride, ip, icount = node.raw
+        vertices = np.ndarray(
+            (count, 3), dtype="<f4", buffer=data, offset=vp,
+            strides=(stride, 4)).astype(np.float64)
+        indices = np.frombuffer(data, dtype="<u2", count=icount, offset=ip)
+    else:
+        vertices = np.asarray(node.verts, dtype=np.float64)
+        indices = np.asarray(node.indices, dtype=np.uint16)
+
+    m = np.asarray(matrix, dtype=np.float64)
+    for first in range(0, len(indices), 196608):
+        triangles = indices[first:first + 196608].reshape((-1, 3))
+        points = vertices[triangles]
+        x = (points[:, :, 0] * m[0] + points[:, :, 1] * m[4]
+             + points[:, :, 2] * m[8] + m[12])
+        y = (points[:, :, 0] * m[1] + points[:, :, 1] * m[5]
+             + points[:, :, 2] * m[9] + m[13])
+        z = (points[:, :, 0] * m[2] + points[:, :, 1] * m[6]
+             + points[:, :, 2] * m[10] + m[14])
+        records = np.empty((len(triangles), 9), dtype=np.float64)
+        records[:, 0] = -x[:, 0]
+        records[:, 1] = z[:, 0]
+        records[:, 2] = -x[:, 1]
+        records[:, 3] = z[:, 1]
+        records[:, 4] = -x[:, 2]
+        records[:, 5] = z[:, 2]
+        records[:, 6:9] = y
+        yield records
+
+
 
 def read_fast_lane(track_dir):
     """AC's own racing line, if the track ships one.
@@ -124,14 +218,16 @@ def resample_line(pts, spacing):
     return out, total
 
 
-def collect(k, valid_keys=None):
+def collect(k, valid_keys=None, road=None, solid=None):
     """Split the model into spawn markers, collidable surfaces and drivable ones.
 
     Which surfaces count as drivable comes from AC's own surfaces file, where
     each one is flagged valid or not. Matching on the name "ROAD" only works on
     tracks that happen to use it; real circuits use names like ASPHNEW or RDOLD.
     """
-    starts, pits, road, solid = [], [], [], []
+    starts, pits = [], []
+    road = TriangleBuffer() if road is None else road
+    solid = TriangleBuffer() if solid is None else solid
     for n in k.walk():
         if n.type == 1 and n.matrix:
             if n.name.startswith("AC_START"):
@@ -140,7 +236,7 @@ def collect(k, valid_keys=None):
             elif n.name.startswith("AC_PIT"):
                 m = world_matrix(n)
                 pits.append(((m[12], m[13], m[14]), yaw_of(m), n.name))
-        elif n.type in (2, 3) and n.verts:
+        elif n.type in (2, 3) and n.vertex_count:
             up = n.name.upper()
             if not up[:1].isdigit():
                 continue
@@ -151,15 +247,10 @@ def collect(k, valid_keys=None):
             else:
                 drivable = "ROAD" in up
             m = world_matrix(n)
-            pts = [transform(m, v) for v in n.verts]
-            idx = n.indices
-            for i in range(0, n.index_count, 3):
-                a, b, c = pts[idx[i]], pts[idx[i + 1]], pts[idx[i + 2]]
-                tri = (((a[0], a[2]), (b[0], b[2]), (c[0], c[2])),
-                       (a[1], b[1], c[1]))
-                solid.append(tri)
+            for records in mesh_triangles(n, m):
+                solid.extend(records)
                 if drivable:
-                    road.append(tri)
+                    road.extend(records)
 
     def order(item):
         tail = item[2].rsplit("_", 1)[-1]
@@ -180,9 +271,9 @@ class SurfaceProbe:
     """
 
     def __init__(self, tris):
-        a = np.array([[t[0][0], t[0][1], t[1][0], t[1][1], t[2][0], t[2][1],
-                       ys[0], ys[1], ys[2]] for t, ys in tris], np.float64)
-        self.x1, self.z1, self.x2, self.z2, self.x3, self.z3 = a[:, :6].T
+        a = np.frombuffer(tris.data, dtype=np.float64).reshape((-1, 9))
+        self.x1, self.z1, self.x2, self.z2, self.x3, self.z3 = (
+            a[:, i] for i in range(6))
         self.y = a[:, 6:9]
         self.den = ((self.z2 - self.z3) * (self.x1 - self.x3)
                     + (self.x3 - self.x2) * (self.z1 - self.z3))
@@ -221,19 +312,47 @@ class RoadGrid:
     sector polygons. Working from actual coverage avoids guessing at the shape.
     """
 
-    def __init__(self, tris, cell=1.0):
+    def __init__(self, tris, cell=1.0, diagnostics=None, label="grid"):
         self.cell = cell
-        xs = [p[0] for t, _ys in tris for p in t]
-        zs = [p[1] for t, _ys in tris for p in t]
-        self.minx, self.maxx = min(xs), max(xs)
-        self.minz, self.maxz = min(zs), max(zs)
+        self.diagnostics = diagnostics
+        self.minx = self.minz = float("inf")
+        self.maxx = self.maxz = float("-inf")
+        for t, _ys in tris:
+            for x, z in t:
+                self.minx = min(self.minx, x)
+                self.maxx = max(self.maxx, x)
+                self.minz = min(self.minz, z)
+                self.maxz = max(self.maxz, z)
         self.w = int((self.maxx - self.minx) / cell) + 2
         self.h = int((self.maxz - self.minz) / cell) + 2
-        self.grid = bytearray(self.w * self.h)
-        self.ysum = [0.0] * (self.w * self.h)
-        self.ycnt = [0] * (self.w * self.h)
-        for t, ys in tris:
-            self._raster(t, ys)
+        cells = self.w * self.h
+        _memory_log(
+            diagnostics, "grid allocation start",
+            "label=%s bounds=%.2f..%.2f x %.2f..%.2f cell=%.2f "
+            "dimensions=%d x %d cells=%d triangles=%d "
+            "grid_bytes=%d ysum_bytes=%d ycnt_bytes=%d clearance_bytes=%d" %
+            (label, self.minx, self.maxx, self.minz, self.maxz, cell,
+             self.w, self.h, cells, len(tris), cells,
+             cells * array("d").itemsize, cells * array("I").itemsize,
+             cells * array("f").itemsize))
+        stage = "occupancy grid"
+        try:
+            self.grid = bytearray(cells)
+            stage = "height sum"
+            self.ysum = array("d", [0.0]) * cells
+            stage = "height count"
+            self.ycnt = array("I", [0]) * cells
+            stage = "triangle rasterization"
+            for t, ys in tris:
+                self._raster(t, ys)
+        except MemoryError:
+            _memory_log(diagnostics, "grid allocation failed",
+                        "label=%s stage=%s dimensions=%d x %d cells=%d" %
+                        (label, stage, self.w, self.h, cells))
+            raise
+        _memory_log(diagnostics, "grid rasterization complete",
+                    "label=%s dimensions=%d x %d cells=%d" %
+                    (label, self.w, self.h, cells))
 
     def _raster(self, t, ys):
         xs = [p[0] for p in t]
@@ -283,36 +402,44 @@ class RoadGrid:
     def clearance(self):
         """Chamfer distance transform: metres from each cell to the nearest edge."""
         big = float(self.w + self.h)
-        d = [0.0 if not self.grid[i] else big for i in range(self.w * self.h)]
+        cells = self.w * self.h
+        _memory_log(self.diagnostics, "clearance allocation start",
+                    "dimensions=%d x %d cells=%d bytes=%d" %
+                    (self.w, self.h, cells, cells * array("f").itemsize))
+        try:
+            d = array("f", [0.0]) * cells
+        except MemoryError:
+            _memory_log(self.diagnostics, "clearance allocation failed",
+                        "dimensions=%d x %d cells=%d bytes=%d" %
+                        (self.w, self.h, cells, cells * array("f").itemsize))
+            raise
         w, h = self.w, self.h
+        values = np.frombuffer(d, dtype=np.float32).reshape((h, w))
+        occupancy = np.frombuffer(self.grid, dtype=np.uint8).reshape((h, w))
+        np.multiply(occupancy, np.float32(big), out=values, casting="unsafe")
+        x = np.arange(w, dtype=np.float32)
+        one, diagonal = np.float32(1.0), np.float32(1.414)
         for gz in range(h):
-            for gx in range(w):
-                i = gz * w + gx
-                if d[i] == 0.0:
-                    continue
-                best = d[i]
-                if gx > 0:
-                    best = min(best, d[i - 1] + 1)
-                if gz > 0:
-                    best = min(best, d[i - w] + 1)
-                if gx > 0 and gz > 0:
-                    best = min(best, d[i - w - 1] + 1.414)
-                if gx < w - 1 and gz > 0:
-                    best = min(best, d[i - w + 1] + 1.414)
-                d[i] = best
+            row = values[gz]
+            base = row.copy()
+            if gz > 0:
+                previous = values[gz - 1]
+                np.minimum(base, previous + one, out=base)
+                base[1:] = np.minimum(base[1:], previous[:-1] + diagonal)
+                base[:-1] = np.minimum(base[:-1], previous[1:] + diagonal)
+            row[:] = x + np.minimum.accumulate(base - x)
         for gz in range(h - 1, -1, -1):
-            for gx in range(w - 1, -1, -1):
-                i = gz * w + gx
-                best = d[i]
-                if gx < w - 1:
-                    best = min(best, d[i + 1] + 1)
-                if gz < h - 1:
-                    best = min(best, d[i + w] + 1)
-                if gx < w - 1 and gz < h - 1:
-                    best = min(best, d[i + w + 1] + 1.414)
-                if gx > 0 and gz < h - 1:
-                    best = min(best, d[i + w - 1] + 1.414)
-                d[i] = best
+            row = values[gz]
+            base = row.copy()
+            if gz < h - 1:
+                following = values[gz + 1]
+                np.minimum(base, following + one, out=base)
+                base[:-1] = np.minimum(base[:-1], following[1:] + diagonal)
+                base[1:] = np.minimum(base[1:], following[:-1] + diagonal)
+            row[:] = np.minimum(base, np.minimum.accumulate(
+                (base + x)[::-1])[::-1] - x)
+        _memory_log(self.diagnostics, "clearance complete",
+                    "dimensions=%d x %d cells=%d" % (self.w, self.h, cells))
         return d
 
 
@@ -320,7 +447,7 @@ NEIGHBOURS = ((1, 0), (-1, 0), (0, 1), (0, -1),
               (1, 1), (1, -1), (-1, 1), (-1, -1))
 
 
-def fit_loop(tris, seed=None):
+def fit_loop(tris, seed=None, diagnostics=None):
     """Find the largest closed loop through the road network.
 
     The road is skeletonised to cells that sit well clear of any edge, which
@@ -328,7 +455,7 @@ def fit_loop(tris, seed=None):
     every remaining edge into a candidate cycle, and the longest one is the
     biggest lap the layout offers.
     """
-    g = RoadGrid(tris)
+    g = RoadGrid(tris, diagnostics=diagnostics, label="road")
     dist = g.clearance()
     g.dist = dist
     w, h = g.w, g.h
@@ -523,6 +650,89 @@ def resample(pts):
     return out, total
 
 
+def start_grid_path_offsets(wps, starts):
+    """Keep the alternate lines apart across the grid and its launch zone."""
+    n = len(wps)
+    if not n:
+        return [], 0
+
+    if not starts:
+        return ([(-min(2.0, max(4.0, wp[3]) * 0.4),
+                  min(2.0, max(4.0, wp[3]) * 0.4)) for wp in wps], 0)
+
+    offsets = []
+    start_indices = []
+    for (sx, _sy, sz), _yaw, _name in starts:
+        i = min(range(n), key=lambda j:
+                (wps[j][0] - sx) ** 2 + (wps[j][2] - sz) ** 2)
+        start_indices.append(i)
+        x, _y, z, _half = wps[i]
+        nx, _, nz, _ = wps[(i + 1) % n]
+        fx, fz = nx - x, nz - z
+        flen = math.hypot(fx, fz) or 1.0
+        px, pz = -fz / flen, fx / flen
+        offsets.append((sx - x) * px + (sz - z) * pz)
+
+    negative = [offset for offset in offsets if offset < 0.0]
+    positive = [offset for offset in offsets if offset > 0.0]
+    nominal = LANE_SPACING * 0.5
+    start_left = (min(sum(negative) / len(negative), -nominal)
+                  if negative else -nominal)
+    start_right = (max(sum(positive) / len(positive), nominal)
+                   if positive else nominal)
+
+    anchor = start_indices[0]
+    distances = [0.0] * n
+    for step in range(1, n):
+        i = (anchor + step - 1) % n
+        j = (anchor + step) % n
+        distances[j] = distances[i] + math.hypot(
+            wps[j][0] - wps[i][0], wps[j][2] - wps[i][2])
+
+    track_length = distances[-1] + math.hypot(
+        wps[anchor][0] - wps[(anchor - 1) % n][0],
+        wps[anchor][2] - wps[(anchor - 1) % n][2])
+    grid_distances = []
+    for i in start_indices:
+        distance = distances[i]
+        if distance > track_length * 0.5:
+            distance -= track_length
+        grid_distances.append(distance)
+
+    launch_start = min(grid_distances) - START_GRID_MARGIN_DISTANCE
+    launch_end = max(grid_distances) + START_LANE_HOLD_DISTANCE
+    left, right = [], []
+    transition_end = launch_end + START_LANE_BLEND_DISTANCE
+    for i, (_x, _y, _z, half) in enumerate(wps):
+        distance = distances[i]
+        if distance > track_length * 0.5:
+            distance -= track_length
+        if distance <= launch_start:
+            blend = 1.0
+        elif distance <= launch_end:
+            blend = 0.0
+        elif distance >= transition_end:
+            blend = 1.0
+        else:
+            t = (distance - launch_end) / START_LANE_BLEND_DISTANCE
+            blend = t * t * (3.0 - 2.0 * t)
+
+        width = max(4.0, half)
+        clearance = max(0.0, min(width - 0.5, width * 0.9))
+        normal = min(2.0, width * 0.4)
+        left.append(max(-clearance, min(clearance,
+                                        start_left * (1.0 - blend) - normal * blend)))
+        right.append(max(-clearance, min(clearance,
+                                         start_right * (1.0 - blend) + normal * blend)))
+
+    print("start grid paths: %.2f m left, %.2f m right at wp %d; "
+          "grid %.1f..%.1f m, launch hold %.0f m, blend over %.0f m"
+          % (start_left, start_right, anchor, min(grid_distances),
+             max(grid_distances), START_LANE_HOLD_DISTANCE,
+             START_LANE_BLEND_DISTANCE))
+    return list(zip(left, right)), anchor
+
+
 def write_sector_polys(wps, path):
     """Timing triggers.
 
@@ -677,6 +887,11 @@ def build_pitlane(wps, ground):
 
 
 def build(track_dir, out_path, layout):
+    diagnostics = out_path + ".memory.log"
+    with open(diagnostics, "w", encoding="utf-8") as f:
+        f.write("AIW memory diagnostics | python=%s | pointer_bits=%d | %s\n" %
+                (sys.version.split()[0], struct.calcsize("P") * 8,
+                 _memory_status()))
     import convert_track
     # A real circuit is split across several model files; reading only the
     # first picks up whichever happens to sort first, often a prop file.
@@ -690,14 +905,24 @@ def build(track_dir, out_path, layout):
     surf = convert_track.load_surfaces(layout_root, steam_paths.AC_DIR)
     valid = {key.upper() for key, info in surf.items() if info["valid"]}
     print("drivable surface keys: %s" % ", ".join(sorted(valid)))
-    starts, pits, road, solid = [], [], [], []
+    starts, pits = [], []
+    road, solid = TriangleBuffer(), TriangleBuffer()
     for path in paths:
+        _memory_log(diagnostics, "model collection start",
+                    "file=%s bytes=%d" % (os.path.basename(path),
+                                           os.path.getsize(path)))
         k = KN5(path, geometry=True, placement=placed.get(path))
-        st, pt, rd, sd = collect(k, valid)
+        solid_before, road_before = len(solid), len(road)
+        st, pt, _rd, _sd = collect(k, valid, road, solid)
         starts += st
         pits += pt
-        road += rd
-        solid += sd
+        del k
+        gc.collect()
+        _memory_log(
+            diagnostics, "model collection complete",
+            "file=%s solid_triangles=%d road_triangles=%d" %
+            (os.path.basename(path), len(solid) - solid_before,
+             len(road) - road_before))
     starts.sort(key=lambda i: int(i[2].rsplit("_", 1)[-1])
                 if i[2].rsplit("_", 1)[-1].isdigit() else 0)
     pits.sort(key=lambda i: int(i[2].rsplit("_", 1)[-1])
@@ -708,19 +933,13 @@ def build(track_dir, out_path, layout):
     starts = [(mirror_pos(p), mirror_yaw(y), n) for p, y, n in starts]
     pits = [(mirror_pos(p), mirror_yaw(y), n) for p, y, n in pits]
 
-    def flip(tris):
-        return [(((-a[0], a[1]), (-b[0], b[1]), (-c[0], c[1])), ys)
-                for (a, b, c), ys in tris]
-
-    road = flip(road)
-    solid = flip(solid)
     if not road:
         raise SystemExit("no ROAD meshes found, cannot fit a path")
 
     ac_line = [mirror_pos(p) for p in read_fast_lane(layout_root)]
     if ac_line:
         pts, length = resample_line(ac_line, SPACING)
-        grid = RoadGrid(road)
+        grid = RoadGrid(road, diagnostics=diagnostics, label="road")
         dist = grid.clearance()
         grid.dist = dist
         wps = []
@@ -732,15 +951,25 @@ def build(track_dir, out_path, layout):
         print("using AC's racing line: %d points -> %d waypoints, %.0f m, "
               "%d on road" % (len(ac_line), len(wps), length, on))
     else:
-        loop, grid = fit_loop(road, seed=starts[0][0] if starts else None)
+        loop, grid = fit_loop(road, seed=starts[0][0] if starts else None,
+                              diagnostics=diagnostics)
         wps, length = resample(loop)
     n = len(wps)
     print("grid %d, pits %d, road triangles %d" % (len(starts), len(pits), len(road)))
     print("path %d waypoints, %.1f m around" % (n, length))
 
-    ground = RoadGrid(solid)
+    # Keep road coverage for pit/garage checks; the all-surface data is only
+    # needed by the exact height probe.
+    if hasattr(grid, "dist"):
+        del grid.dist
+    if ac_line:
+        del dist
+    del road
+
     probe = SurfaceProbe(solid)
+    ground = grid
     ground.probe = probe
+    del solid
 
     # AC's start and pit markers sit at the centre of a marker box, typically a
     # couple of metres up, so cars spawn in mid air and fall. Drop each one onto
@@ -781,6 +1010,7 @@ def build(track_dir, out_path, layout):
                                          for i in range(len(pit_boxes)))]
         print("garages: at AC's start spots (%d)" % len(starts))
     total_wp = len(wps) + (len(pl["lane"]) + 2 * len(pl["boxes"]) if pl else 0)
+    grid_path_offsets, start_wp = start_grid_path_offsets(wps, starts)
 
     L = []
     a = L.append
@@ -829,15 +1059,15 @@ def build(track_dir, out_path, layout):
     a("autogengridf=(0.0,11.00)")
     a("autogenaltgridf=(1.0,8.00)")
     a("number_waypoints=%d" % total_wp)
+    a("teleportwp=(%d)" % start_wp)
     if pl:
-        a("teleportwp=(%d)" % pl["entry"])
         a("pitlanepaths=(1,1)")
     a("lap_length=%.6f" % length)
     a("sector_1_length=%.6f" % (length / SECTORS))
     a("sector_2_length=%.6f" % (length * 2 / SECTORS))
     a("LeftHandedPits=%d" % (1 if pl and pl["side"] < 0 else 0))
     a("AIBrakingStiffness=(1.0000,1.0000,0.9000)")
-    a("LaneSpacing=4.50")
+    a("LaneSpacing=%.2f" % LANE_SPACING)
     a("AIRange=(0.1000)")
     a("AISpec=(0.0000,0.0000,1.0000,0.0000)")
 
@@ -858,13 +1088,15 @@ def build(track_dir, out_path, layout):
         a("wp_normal=(0.0000,1.0000,0.0000)")
         # rF2 wants three driving lines per waypoint. With one it logs
         # "less than 3 paths defined" and patches in defaults.
-        lane = min(2.0, half * 0.4)
-        for pi, off in ((0, 0.0), (1, -lane), (2, lane)):
+        lane_left, lane_right = grid_path_offsets[i]
+        for pi, off in ((0, 0.0), (1, lane_left), (2, lane_right)):
             a("wp_pathinfo2=(%d,%.4f,-1.0000,-1.0000)" % (pi, off))
             a("wp_oriantation=(%d,0.0000,%.4f,0.0000)" % (pi, yaw))
             a("wp_pathflags=(%d,0)" % pi)
-        a("wp_width=(%.3f,%.3f,%.3f,%.3f)" % (half, half, half + 2, half + 2))
-        a("wp_dwidth=(%.3f,%.3f,0.000,0.000)" % (half + 2, half + 2))
+        a("wp_width=(%.3f,%.3f,%.3f,%.3f)" %
+          (half, half, half + AI_BOUNDARY_MARGIN, half + AI_BOUNDARY_MARGIN))
+        a("wp_dwidth=(%.3f,%.3f,0.000,0.000)" %
+          (half + AI_BOUNDARY_MARGIN, half + AI_BOUNDARY_MARGIN))
         a("wp_lockedAlpha=(0)")
         a("wp_test_speed=(25.000000)")
         a("wp_reverb=(0)")
