@@ -37,12 +37,10 @@ def mirror_yaw(y):
 
 
 def face_out(yaw):
-    """Turn an AC pit marker to face the way rF2 wants a car to sit.
+    """Turn an AC start or pit marker to the direction an rF2 car should face.
 
-    AC's AC_PIT markers point into the box, the way the car arrives. rF2 reads
-    the orientation as the way the car faces once parked, which is the other
-    way round, so a car spawned straight from the marker sits backwards in its
-    own pit.
+    AC marker headings are opposite the direction rF2 expects the spawned car
+    to face.
     """
     return (yaw + math.pi + math.pi) % (2.0 * math.pi) - math.pi
 
@@ -805,7 +803,7 @@ def build(track_dir, out_path, layout):
         for i, (pos, yaw, _name) in enumerate(items):
             a("GridIndex=%d" % i)
             a("Pos=(%.3f,%.3f,%.3f)" % pos)
-            a("Ori=(0.000,%.3f,0.000)" % yaw)
+            a("Ori=(0.000,%.3f,0.000)" % face_out(yaw))
         a("")
 
     spots("GRID", starts)
