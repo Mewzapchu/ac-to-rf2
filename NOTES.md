@@ -1102,3 +1102,91 @@ cameras 0.5 min, Blender 9 min (70%), finalize 1 s.
   in for a texture a build failed to make, so verify_install would not see
   it missing. Step 1 now starts the folder from empty (tested: a planted
   file is gone, 82 textures left).
+
+## 2026-11-15: review against every installed track (first batch of fixes)
+Measured on the 79 AC tracks installed here (197 track x layout
+combinations, 842 kn5 files), not only on the seven built so far.
+
+- kn5 header. The u32 after the version (when version > 5) is one unused
+  value, not the length of a block to skip. It is 0 in most files. Kunos'
+  Barcelona, Brands Hatch, Nordschleife and Red Bull Ring carry 912125,
+  781233, 673425 and 743221: skipping that many bytes landed inside a
+  texture and step 1 died with struct.error. Read and ignored, all 842 files
+  parse, 773 to their last byte (the other 69 are the seven protected
+  tracks, whose trailing data is left alone). The same read was written out
+  three times (kn5.KN5, texture_alpha_stats, extract_textures); it is now
+  kn5.read_header, and kn5.embedded_textures yields the textures. Spa's and
+  Wuhu's extracted textures are byte identical; step 1 now finishes on all
+  four tracks.
+- Mesh names repeat. AC does not keep them unique and every step looked a
+  mesh up by name, so the last row of a name answered for all of them: 25 of
+  79 tracks have meshes that took another's material, collision or
+  visibility (Battersea 2,383 rows, Highlands 48, Laguna 1). In the
+  installed Spa, D.gmt (13,795 triangles of metals1) carried trees2, U.gmt
+  trees2 for trees2B, AS.gmt bushes for trees2. Every row now has "id":
+  "<index into kn5>:<n-th mesh of that file in walk order>", and step 1's
+  sampling, blender_stage, finalize_track and verify_install go by it;
+  exported.json records it. A build made before ids existed still works
+  (--skip-geometry): its records have no id and fall back to the name, which
+  gives the old scene exactly. Rebuilt Spa: 0 of 1,390 files carry another
+  mesh's material (3 before); D's shadow caster goes from Texture to Solid.
+- A group node named like the mesh under it. Step 1's second pass asked
+  "is this name wanted" before "is this a mesh", sampled the group, got
+  nothing and never came back for the mesh: 21 of 79 tracks, Yas Marina 984
+  meshes (65% of its triangles), Laguna 33. Those meshes sat out the
+  coplanar test, the rubber vote and the backdrop test. Going by id fixes
+  it: on Yas Marina 29 road meshes are now found under the rubber and 196
+  materials gain UV samples; Laguna gains Pitlane_Props_BASE and distanz.
+- Surface keys written with the mesh's digit (KEY=1ASPHALT). The mesh name
+  loses its digits before the comparison and the key did not, so they never
+  matched: Fuji had no road ("no ROAD meshes found", after check_setup said
+  all good), COTA 2,719 drivable triangles of 71,286. Seven tracks write a
+  key this way. key_stem takes the digits off the key too, in convert_track
+  and make_aiw. On those tracks every mesh reached this way also starts with
+  the key exactly as written, except 884 triangles on COTA (01ASPHALT9000)
+  and 392 on tajo (2PIT against 1PIT), so it cannot be told offline whether
+  AC compares the whole name; those 392 are the only doubtful ones. Fuji now
+  builds: 757 of 757 waypoints on road, 4,546 m, verify_install passes. The
+  drivable keys of the seven built tracks are unchanged and Spa's and Wuhu's
+  AIW are byte identical.
+- One material name, several definitions. AC materials belong to their kn5
+  and only the name is shared; the first definition met was used for every
+  file. 37 of 79 tracks. Laguna's tyres: one mesh at ksDiffuse 0.5 /
+  ksAmbient 0.7 in the first file, 128 meshes (2.2M triangles) at 0.3 / 0.5
+  in another, all lit as the first. A definition that differs in anything
+  the mapping carries (shader, blend, alpha test, depth mode, textures, the
+  carried coefficients) now gets "material_key" "<name> #2" and an rF2
+  material of its own; "ac_material" stays the AC name, which is what CSP's
+  patterns match. UV samples and the rubber vote go by the key.
+  Tried and reverted: keying the per-material medians (uv_per_m, m_per_u/v,
+  flatness, ground_like, track_surface) by definition as well. They rest on
+  few meshes: Silverstone's Curb_new has two more definitions on one
+  undrawn physics mesh each, and without those two the kerbs' median
+  flatness fell from 0.987 to 0.859, turning 93,544 triangles from ground to
+  not-ground. They stay on the AC name, so those fields are unchanged on all
+  seven tracks.
+- rF2 material names that collide. safe() alone merged AC names differing in
+  punctuation: Laguna's concrete-box (ksDiffuse 0.2) with concrete_box
+  (0.3), Spa's asph-pitlane-old (0.31, 6 meshes) with asph_pitlane_old (0.4,
+  1 mesh); six tracks. Names are now handed out once per (definition,
+  surface prefix) and a taken one gets _2, compared without case because the
+  textures baked per material are files. On Spa this splits one baked
+  texture in two (asph_pitlane_old_2_base.dds for the six, a dimmed copy for
+  the one).
+- Transparency was read from the first 60,000 DXT5 blocks only. Imola's
+  grandstand atlas (2048x1024, 85 meshes) is 100% opaque that far and 81.5%
+  over the whole image; Mugello's pitlane 97.3 -> 53.7, Abu Dhabi's pit
+  perches 100 -> 61.3 and 81.7, Nurburgring's misc 100 -> 93.2. Those four
+  tracks change sides of MIN_TRANSPARENT_PCT (Imola: 85 meshes now blend);
+  490 textures of up to 60,000 blocks read exactly as before, and none of
+  the seven built tracks changes. numpy, so the full read costs nothing.
+- Checked: old against new step 1 on the seven built tracks. Wuhu, Helvetic
+  and Highlands: every row identical apart from the two new fields. Nagao 1
+  row, Spa 13, Silverstone 67, Laguna 163, all of them rf2_material (plus
+  under_rubber on 55 undrawn Silverstone markers). The .tdf, .scn and .gdb
+  are byte identical on all seven.
+- Seen, not changed here: grip per rF2 prefix still comes from the first
+  mesh met (Fuji's road is written 0.92); make_aiw calls a mesh drivable if
+  any valid key is a prefix of its name, where convert_track takes the
+  longest key; the per-material medians include undrawn physics shells
+  (Spa's nine visible `barriers` meshes share theirs with 462 shells).

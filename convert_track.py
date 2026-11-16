@@ -17,7 +17,7 @@ import steam_paths
 import struct
 from collections import OrderedDict, defaultdict
 
-from kn5 import KN5
+from kn5 import KN5, embedded_textures
 
 # AC surface key -> rF2 TDF material prefix. The rF2 terrain definition matches
 # the FIRST PART of a material name, so the prefix is what selects the surface.
@@ -70,25 +70,7 @@ def texture_alpha_stats(kn5_paths):
     for path in kn5_paths:
         if not os.path.exists(path):
             continue
-        with open(path, "rb") as f:
-            d = f.read()
-        p = 6
-        ver = struct.unpack_from("<I", d, p)[0]
-        p += 4
-        if ver > 5:
-            p += 4 + struct.unpack_from("<I", d, p)[0]
-        count = struct.unpack_from("<I", d, p)[0]
-        p += 4
-        for _ in range(count):
-            p += 4
-            ln = struct.unpack_from("<I", d, p)[0]
-            p += 4
-            name = d[p:p + ln].decode("utf-8", "replace")
-            p += ln
-            size = struct.unpack_from("<I", d, p)[0]
-            p += 4
-            blob = d[p:p + size]
-            p += size
+        for name, blob in embedded_textures(path):
             stats[name] = opaque_percent(blob)
     return stats
 
@@ -97,17 +79,22 @@ def opaque_percent(blob):
     """100 means no transparency anywhere; None if we cannot tell."""
     if len(blob) < 132 or blob[:4] != b"DDS " or blob[84:88] != b"DXT5":
         return None
+    import numpy as np
     h, w = struct.unpack_from("<II", blob, 12)
     blocks = max(1, (w + 3) // 4) * max(1, (h + 3) // 4)
-    seen = opaque = 0
-    for b in range(min(blocks, 60000)):
-        off = 128 + b * 16
-        if off + 2 > len(blob):
-            break
-        seen += 1
-        if blob[off] >= 250 and blob[off + 1] >= 250:
-            opaque += 1
-    return 100.0 * opaque / seen if seen else None
+    # Every block of the full-size image. This used to stop after 60,000,
+    # which is under half of Imola's 2048 x 1024 grandstand atlas (85
+    # meshes): opaque that far, 18.5% see-through as a whole, so it was drawn
+    # solid. The answer changes sides of MIN_TRANSPARENT_PCT on four of 79
+    # tracks (Imola, Mugello, Abu Dhabi, Nurburgring) and on none of the
+    # seven built so far; every texture of up to 60,000 blocks reads the same.
+    raw = np.frombuffer(blob, np.uint8)
+    a1 = raw[129:129 + blocks * 16:16]          # each block's two alpha
+    a0 = raw[128:128 + blocks * 16:16][:len(a1)]   # endpoints, 16 bytes apart
+    if not len(a1):
+        return None
+    opaque = int(np.count_nonzero((a0 >= 250) & (a1 >= 250)))
+    return 100.0 * opaque / len(a1)
 
 
 
@@ -346,15 +333,16 @@ def drop_coplanar_duplicates(rows, points, gap=0.01):
 
     live = [r for r in rows
             if r.get("render", True) and not r.get("lod_of")
-            and points.get(r["mesh"]) and not has_lod_range(r)]
+            and points.get(r["id"]) and not has_lod_range(r)]
+    # By the mesh's id, never its name: names repeat (see mesh ids in main).
     arr, grid, box = {}, {}, {}
     for row in live:
-        p_ = np.asarray(points[row["mesh"]], dtype=float)
-        arr[row["mesh"]] = p_
-        grid[row["mesh"]] = set(zip((p_[:, 0] // cell).astype(int).tolist(),
-                                    (p_[:, 2] // cell).astype(int).tolist()))
-        box[row["mesh"]] = (p_[:, 0].min(), p_[:, 0].max(),
-                            p_[:, 2].min(), p_[:, 2].max())
+        p_ = np.asarray(points[row["id"]], dtype=float)
+        arr[row["id"]] = p_
+        grid[row["id"]] = set(zip((p_[:, 0] // cell).astype(int).tolist(),
+                                  (p_[:, 2] // cell).astype(int).tolist()))
+        box[row["id"]] = (p_[:, 0].min(), p_[:, 0].max(),
+                          p_[:, 2].min(), p_[:, 2].max())
     fine = [r for r in live if rank(r["mesh"]) == 0]
     coarse = [r for r in live if (rank(r["mesh"]) or 0) > 0]
     dropped = 0
@@ -366,16 +354,16 @@ def drop_coplanar_duplicates(rows, points, gap=0.01):
     # them drawing. What matters is whether the high detail surface already
     # occupies that ground at that height, whatever it paints it with.
     for b_row in sorted(coarse, key=lambda r: -(rank(r["mesh"]) or 0)):
-        pb = arr[b_row["mesh"]]
-        bx0, bx1, bz0, bz1 = box[b_row["mesh"]]
+        pb = arr[b_row["id"]]
+        bx0, bx1, bz0, bz1 = box[b_row["id"]]
         over = [r for r in fine
-                if not (box[r["mesh"]][1] < bx0 or box[r["mesh"]][0] > bx1
-                        or box[r["mesh"]][3] < bz0 or box[r["mesh"]][2] > bz1)]
+                if not (box[r["id"]][1] < bx0 or box[r["id"]][0] > bx1
+                        or box[r["id"]][3] < bz0 or box[r["id"]][2] > bz1)]
         if not over:
             continue
         union = set()
         for r in over:
-            union |= grid[r["mesh"]]
+            union |= grid[r["id"]]
         bi = (pb[:, 0] // cell).astype(int)
         bk = (pb[:, 2] // cell).astype(int)
         inside = np.fromiter(
@@ -386,7 +374,7 @@ def drop_coplanar_duplicates(rows, points, gap=0.01):
         if inside.mean() < 0.7:
             continue
         sel = pb[inside]
-        pool = np.concatenate([arr[r["mesh"]] for r in over])
+        pool = np.concatenate([arr[r["id"]] for r in over])
         dx = sel[:, 0][:, None] - pool[:, 0][None, :]
         dz = sel[:, 2][:, None] - pool[:, 2][None, :]
         d2 = dx * dx + dz * dz
@@ -409,7 +397,7 @@ def drop_coplanar_duplicates(rows, points, gap=0.01):
     return dropped
 
 
-def uv_samples(node, out, per_mesh=200):
+def uv_samples(node, out, key, per_mesh=200):
     """Triangle-centre UVs for this mesh, wrapped into the texture.
 
     A building's white wall can be a small corner of a large atlas, so the
@@ -430,7 +418,7 @@ def uv_samples(node, out, per_mesh=200):
         u = (a[0] + b[0] + c[0]) / 3.0
         v = (a[1] + b[1] + c[1]) / 3.0
         pts.append([round(u % 1.0, 4), round(v % 1.0, 4)])
-    out[node.name] = pts
+    out[key] = pts
 
 
 def surfaces_under_rubber(rows, points, reach=1.5, height=0.3, share=0.08):
@@ -454,14 +442,14 @@ def surfaces_under_rubber(rows, points, reach=1.5, height=0.3, share=0.08):
             continue
         if "groove" in r["ac_material"].lower():
             continue
-        for x, y, z in points.get(r["mesh"]) or ():
-            grid[(int(x // reach), int(z // reach))].append((x, y, z, r["ac_material"]))
+        for x, y, z in points.get(r["id"]) or ():
+            grid[(int(x // reach), int(z // reach))].append((x, y, z, r["material_key"]))
     votes = collections.Counter()
     cast = 0
     for r in rows:
         if "groove" not in r["ac_material"].lower() or not r.get("render", True)                 or r.get("lod_of"):
             continue
-        for x, y, z in points.get(r["mesh"]) or ():
+        for x, y, z in points.get(r["id"]) or ():
             gx, gz = int(x // reach), int(z // reach)
             best = None
             for dx in (-1, 0, 1):
@@ -957,6 +945,22 @@ def load_surfaces(track_dir, ac_root):
     return out
 
 
+def key_stem(key):
+    """A surface key as a mesh name carries it: upper case, digits taken off.
+
+    Some tracks write the mesh's digit into the key itself: Fuji and COTA
+    declare KEY=1ASPHALT, 1CURB, 1OFFTRACK for meshes named 1ASPHALT, 1CURB...
+    The mesh name loses its digits before it is compared, so those keys never
+    matched: Fuji had no road at all (make_aiw stopped with "no ROAD meshes
+    found") and COTA 2,719 drivable triangles where it has 71,286. Seven of
+    79 tracks write a key this way. Measured on them, every mesh a digit key
+    reaches this way also starts with the key exactly as written, bar 884
+    triangles on COTA (01ASPHALT9000 for 1ASPHALT) and 392 on tajo (2PIT for
+    1PIT).
+    """
+    return key.upper().lstrip("0123456789")
+
+
 def surface_for_mesh(name, keys):
     """AC physics meshes are named <digits><SURFACE_KEY><suffix>.
 
@@ -968,7 +972,9 @@ def surface_for_mesh(name, keys):
     rest = m.group(2).upper()
     best = None
     for k in keys:
-        if rest.startswith(k.upper()) and (best is None or len(k) > len(best)):
+        stem = key_stem(k)
+        if stem and rest.startswith(stem) and (
+                best is None or len(stem) > len(key_stem(best))):
             best = k
     if best is not None:
         return best, True
@@ -985,6 +991,72 @@ def safe(s):
     return re.sub(r"[^A-Za-z0-9_]", "_", s)
 
 
+# The material coefficients carried into the mapping (plus every mult*).
+CARRIED_PROPS = ("magicMult", "ksDiffuse", "ksAmbient", "ksSpecular",
+                 "ksSpecularEXP",
+                 # AC's grazing angle sheen, which rF2 has fields for and we
+                 # were dropping on the floor. The road asks for a 4x boost.
+                 "fresnelC", "fresnelEXP", "fresnelMaxLevel",
+                 "tarmacSpecularMultiplier", "ksAlphaRef",
+                 "useDetail", "detailUVMultiplier")
+
+
+def carried_props(mat):
+    return {k: v for k, v in mat.props.items()
+            if k.startswith("mult") or k in CARRIED_PROPS}
+
+
+class Materials:
+    """Which material a mesh really has, across all of a layout's files.
+
+    AC materials belong to their kn5; only the name is shared. Every later
+    step took the first definition it met under a name, so on Laguna the
+    `tyres` of a second file (128 meshes, 2.2M triangles, ksDiffuse 0.3) were
+    lit with the first file's 0.5. 37 of 79 tracks define a name differently
+    in two files of one layout. A definition that differs in anything the
+    converter carries gets a key and an rF2 material of its own; identical
+    ones still share one.
+
+    rF2 names are kept apart the same way. Sanitising alone merged names that
+    differ only in punctuation or case (6 tracks, Laguna and Spa among them),
+    and the textures baked per material are files, where case does not count.
+    """
+
+    def __init__(self):
+        self.defs = {}          # AC name -> definitions met, in order
+        self.keys = {}          # (AC name, definition number) -> key
+        self.names = {}         # (key, surface prefix) -> rF2 material name
+        self.taken = set()
+
+    def key(self, mat):
+        sig = (mat.shader, mat.blend, mat.alpha_tested, mat.depth_mode,
+               tuple(sorted(mat.textures.items())),
+               tuple(sorted((k, repr(v)) for k, v in carried_props(mat).items())))
+        defs = self.defs.setdefault(mat.name, [])
+        if sig not in defs:
+            defs.append(sig)
+        ident = (mat.name, defs.index(sig))
+        if ident not in self.keys:
+            # The first definition keeps the plain name.
+            key = mat.name if not ident[1] else "%s #%d" % (mat.name, ident[1] + 1)
+            while key in self.keys.values():
+                key += "+"
+            self.keys[ident] = key
+        return self.keys[ident]
+
+    def rf2_name(self, key, ac_name, prefix=None):
+        ident = (key, prefix)
+        if ident not in self.names:
+            base = safe(ac_name) if prefix is None else "%s_%s" % (prefix, safe(ac_name))
+            name, i = base, 1
+            while name.lower() in self.taken:
+                i += 1
+                name = "%s_%d" % (base, i)
+            self.taken.add(name.lower())
+            self.names[ident] = name
+        return self.names[ident]
+
+
 def write(path, text):
     with open(path, "w", encoding="utf-8") as f:
         f.write(text)
@@ -995,27 +1067,9 @@ def extract_textures(kn5_paths, tex_dir, names):
     for path in kn5_paths:
         if not os.path.exists(path):
             continue
-        with open(path, "rb") as f:
-            d = f.read()
-        p = 6
-        ver = struct.unpack_from("<I", d, p)[0]
-        p += 4
-        if ver > 5:
-            extra = struct.unpack_from("<I", d, p)[0]
-            p += 4 + extra
-        cnt = struct.unpack_from("<I", d, p)[0]
-        p += 4
-        for _ in range(cnt):
-            p += 4
-            ln = struct.unpack_from("<I", d, p)[0]
-            p += 4
-            name = d[p:p + ln].decode("utf-8", "replace")
-            p += ln
-            size = struct.unpack_from("<I", d, p)[0]
-            p += 4
+        for name, blob in embedded_textures(path):
             with open(os.path.join(tex_dir, names.get(name, name)), "wb") as o:
-                o.write(d[p:p + size])
-            p += size
+                o.write(blob)
             n += 1
     return n
 
@@ -1098,30 +1152,47 @@ def main():
     variants = OrderedDict()
     mesh_rows = []
     unmatched = defaultdict(int)
+    materials = Materials()
 
-    for path in kn5_paths:
+    for fi, path in enumerate(kn5_paths):
         if not os.path.exists(path):
             print("  skip missing %s" % os.path.basename(path))
             continue
         k = KN5(path, geometry=True, placement=placed.get(path))
         print("%s: %d materials, %d textures, version %d"
               % (os.path.basename(path), len(k.materials), len(k.textures), k.version))
+        ordinal = -1
         for n in k.walk():
             if n.type not in (2, 3):
                 continue
+            ordinal += 1
             mat = k.materials[n.material_id]
+            mat_key = materials.key(mat)
             key, physical = surface_for_mesh(n.name, list(surfaces.keys()))
             if physical and key is None:
                 unmatched[re.sub(r"^\d+", "", n.name)] += 1
             if physical:
-                prefix = SURFACE_MAP.get((key or "").upper(), DEFAULT_PREFIX)
-                rf2_mat = "%s_%s" % (prefix, safe(mat.name))
+                prefix = SURFACE_MAP.get(key_stem(key or ""), DEFAULT_PREFIX)
+                rf2_mat = materials.rf2_name(mat_key, mat.name, prefix)
             else:
-                rf2_mat = safe(mat.name)
-            variants[(mat.name, key)] = rf2_mat
+                rf2_mat = materials.rf2_name(mat_key, mat.name)
+            variants[(mat_key, key)] = rf2_mat
             mesh_rows.append({
                 "mesh": n.name,
+                # Which mesh this is: its file (index into "kn5") and its
+                # place among that file's meshes, in walk order. AC does not
+                # keep mesh names unique, and every step used to look a mesh
+                # up by name: the last row of a name answered for all of
+                # them. Spa's `D` (13,795 triangles of metals1) was exported
+                # with the trees2 of another `D`; 25 of 79 tracks have meshes
+                # that took another's material, collision or visibility,
+                # Battersea 2,383 of them.
+                "id": "%d:%d" % (fi, ordinal),
                 "ac_material": mat.name,
+                # The material's definition, where two files of the layout
+                # give one name different ones (see Materials). The AC name
+                # for the first; CSP's patterns match "ac_material".
+                "material_key": mat_key,
                 "shader": mat.shader,
                 "surface": key,
                 "physical": physical,
@@ -1172,16 +1243,7 @@ def main():
                 "ac_normals_up": round(ac_normals_up(n), 3),
                 "card_height": round(card_height(n), 3),
                 "textures": mat.textures,
-                "props": {k: v for k, v in mat.props.items()
-                          if k.startswith("mult") or k in (
-                              "magicMult", "ksDiffuse", "ksAmbient",
-                              "ksSpecular", "ksSpecularEXP",
-                              # AC's grazing angle sheen, which rF2 has fields
-                              # for and we were dropping on the floor. The road
-                              # asks for a 4x boost.
-                              "fresnelC", "fresnelEXP", "fresnelMaxLevel",
-                              "tarmacSpecularMultiplier", "ksAlphaRef",
-                              "useDetail", "detailUVMultiplier")},
+                "props": carried_props(mat),
             })
 
     # How much UV a metre of track covers, per material. A texture only looks
@@ -1195,19 +1257,28 @@ def main():
     line_pts = racing_line(layout_root)
     # Sampled in world space so the coplanar test below can tell a second copy
     # of a surface from a separate object that merely sits near it.
-    want_points = {m["mesh"] for m in mesh_rows if m.get("render", True)}
+    # Each mesh by its id. Looked up by name, a group node named like the
+    # mesh under it (Yas Marina: 984 meshes, 65% of the triangles; 21 of 79
+    # tracks) was sampled in the mesh's place and, having no geometry, left
+    # it without points: out of the coplanar test, the rubber vote and the
+    # backdrop test.
+    row_at = {m["id"]: m for m in mesh_rows}
     world_pts = {}
     uv_seen = {}
-    mat_of_mesh = {m["mesh"]: m["ac_material"] for m in mesh_rows}
-    for path in kn5_paths:
+    for fi, path in enumerate(kn5_paths):
         if not os.path.exists(path):
             continue
         model = KN5(path, geometry=True, placement=placed.get(path))
+        ordinal = -1
         for n in model.walk():
-            if n.name in want_points and n.name not in world_pts:
-                world_pts[n.name] = world_points(n, samples=1500)
-                uv_samples(n, uv_seen)
-            if n.type not in (2, 3) or not n.uvs or not n.verts:
+            if n.type not in (2, 3):
+                continue
+            ordinal += 1
+            row = row_at["%d:%d" % (fi, ordinal)]
+            if row.get("render", True):
+                world_pts[row["id"]] = world_points(n, samples=1500)
+                uv_samples(n, uv_seen, row["id"])
+            if not n.uvs or not n.verts:
                 continue
             us = [u for u, _v in n.uvs]
             xs = [p2[0] for p2 in n.verts]
@@ -1215,8 +1286,12 @@ def main():
             du = max(us) - min(us)
             span = ((max(xs) - min(xs)) ** 2 + (max(zs) - min(zs)) ** 2) ** 0.5
             if span > 20 and du > 0.05:
-                # must come from this model, not whichever was loaded last
-                name = model.materials[n.material_id].name
+                # By the AC name, across its definitions (see Materials).
+                # Split per definition these medians rest on too few meshes:
+                # Silverstone's Curb_new has two more definitions on one
+                # physics mesh each, and without those two its kerbs' median
+                # flatness fell from 0.987 to 0.859 -- no longer ground.
+                name = row["ac_material"]
                 spans[name].append(du / span)
                 per_axis[name].extend(uv_metres(n))
                 flatness[name].append(upward_fraction(n))
@@ -1308,7 +1383,7 @@ def main():
     # Road dressing laid along the lap is not a horizon (ALONG_LAP). Only a
     # mesh that needed blending could be a backdrop, so it goes back to that.
     along = [m for m in mesh_rows if m["backdrop"]
-             and lap_share(world_pts.get(m["mesh"]), line_pts) >= ALONG_LAP]
+             and lap_share(world_pts.get(m["id"]), line_pts) >= ALONG_LAP]
     for m in along:
         m["backdrop"] = False
         m["needs_blend"] = True
@@ -1327,15 +1402,12 @@ def main():
             m["alpha_test"] = True
     under = surfaces_under_rubber(mesh_rows, world_pts)
     for m in mesh_rows:
-        m["under_rubber"] = m["ac_material"] in under
+        m["under_rubber"] = m["material_key"] in under
     if under:
         print("   surfaces under the racing line rubber: %s" % ", ".join(sorted(under)))
     by_mat_uv = {}
-    for mesh, pts in uv_seen.items():
-        mat = mat_of_mesh.get(mesh)
-        if mat is None:
-            continue
-        lst = by_mat_uv.setdefault(mat, [])
+    for mesh_id, pts in uv_seen.items():
+        lst = by_mat_uv.setdefault(row_at[mesh_id]["material_key"], [])
         if len(lst) < 1500:
             lst.extend(pts[:1500 - len(lst)])
 

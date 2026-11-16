@@ -472,7 +472,11 @@ def main():
     addon_utils.enable(ADDON, default_set=True, persistent=True)
     silence_popups()
     data = json.load(open(map_path))
-    by_mesh = {m["mesh"]: m for m in data["meshes"]}
+    # By the mesh's id (file and place in it), not its name: AC repeats mesh
+    # names, and by name the last row answered for every mesh that shared it
+    # (see convert_track). A mapping written before ids existed has none.
+    by_id = {m["id"]: m for m in data["meshes"] if "id" in m}
+    by_mesh = {m["mesh"]: m for m in data["meshes"]} if not by_id else {}
 
     template_empty, template_ob, template_mat, coll = make_template()
 
@@ -888,7 +892,7 @@ def main():
                                          counts["two stage"], counts["bump"],
                                          counts["plain"], len(alpha_ref)))
 
-    total_meshes = sum(1 for m in data["meshes"] if m["mesh"] in by_mesh)
+    total_meshes = len(data["meshes"])
     progress_path = os.path.join(out_dir, "progress.txt")
     before = set(os.listdir(out_dir))
     exported = []
@@ -905,12 +909,17 @@ def main():
     load = [0] * shards
     seq = -1
 
-    for path in data["kn5"]:
+    for fi, path in enumerate(data["kn5"]):
         k = KN5(path, geometry=True, placement=data.get("placements", {}).get(path))
+        ordinal = -1
         for node in k.walk():
-            if node.type not in (2, 3) or not node.index_count:
+            if node.type not in (2, 3):
                 continue
-            row = by_mesh.get(node.name)
+            ordinal += 1
+            if not node.index_count:
+                continue
+            row = (by_id.get("%d:%d" % (fi, ordinal)) if by_id
+                   else by_mesh.get(node.name))
             if row is None:
                 continue
             # Neither drawn nor collided with: an AC logic marker such as an
@@ -997,6 +1006,7 @@ def main():
                     if match or new:
                         exported.append({
                             "mesh": row["mesh"],
+                            "id": row.get("id"),
                             "gmt": match or new[0],
                             "material": row["rf2_material"],
                             "physical": row["physical"],

@@ -1,7 +1,7 @@
 """Standalone reader for Assetto Corsa .kn5 files.
 
 Format (version 5-6):
-  "sc6969", u32 version, [u32 extra_len + bytes if version > 5]
+  "sc6969", u32 version, [u32, unused, if version > 5]
   u32 texture_count, then per texture: u32 type, str name, u32 size, bytes
   u32 material_count, then per material: see read_material
   node tree, depth first
@@ -181,6 +181,37 @@ def unfold_vertex_data(kn5):
     return True
 
 
+def read_header(r):
+    """Step a Reader past the signature and version; returns the version."""
+    sig = r.d[0:6]
+    if sig != b'sc6969':
+        raise ValueError('not a kn5 file, signature was %r' % sig)
+    r.skip(6)
+    version = r.u32()
+    if version > 5:
+        # One value, not the length of a block to skip. It is 0 in most
+        # files, which hid the difference; Kunos' Brands Hatch, Barcelona,
+        # Nordschleife and Red Bull Ring carry 781233, 912125, 673425 and
+        # 743221 there, and skipping that many bytes landed in the middle of
+        # a texture. Read and ignored, all 842 kn5 files of 79 tracks parse,
+        # 773 of them to their last byte.
+        r.u32()
+    return version
+
+
+def embedded_textures(path):
+    """(name, bytes) of every texture stored inside a kn5, in file order."""
+    with open(path, 'rb') as f:
+        r = Reader(f.read())
+    read_header(r)
+    for _ in range(r.u32()):
+        r.u32()                 # type
+        name = r.string()
+        size = r.u32()
+        yield name, r.d[r.p:r.p + size]
+        r.skip(size)
+
+
 class KN5:
     def __init__(self, path, geometry=False, placement=None):
         self.geometry = geometry
@@ -188,15 +219,7 @@ class KN5:
             data = f.read()
         self.size = len(data)
         r = Reader(data)
-        sig = r.d[0:6]
-        if sig != b'sc6969':
-            raise ValueError('not a kn5 file, signature was %r' % sig)
-        r.skip(6)
-        self.version = r.u32()
-        if self.version > 5:
-            extra = r.u32()
-            if extra:
-                r.skip(extra)
+        self.version = read_header(r)
         self.textures = []
         for _ in range(r.u32()):
             ttype = r.u32()

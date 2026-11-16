@@ -1368,7 +1368,8 @@ def main():
         # A wall that uses one bright corner of a big atlas averages dark
         # over the whole atlas and was never corrected; this measures the
         # part that is actually drawn.
-        uvs = (data.get("uv_samples") or {}).get(m["ac_material"])
+        uvs = (data.get("uv_samples") or {}).get(
+            m.get("material_key", m["ac_material"]))
         if uvs:
             hh, ww = rgb.shape[:2]
             uv = np.asarray(uvs, dtype=float)

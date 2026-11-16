@@ -133,7 +133,17 @@ def main():
     scn = os.path.join(installed, venue, venue + ".scn")
     data = json.load(open(os.path.join(out_dir, "material_map.json")))
 
+    # A mesh's row by its id where the export recorded one, else by name
+    # (names repeat; see convert_track).
     rows = {m["mesh"]: m for m in data["meshes"]}
+    rows_by_id = {m["id"]: m for m in data["meshes"] if "id" in m}
+
+    def row_of(rec):
+        if rec is None:
+            return None
+        if rec.get("id"):
+            return rows_by_id.get(rec["id"])
+        return rows.get(rec.get("mesh"))
     on_disk = set(os.listdir(map_dir))
     scene = open(scn, encoding="utf-8", errors="replace").read()
 
@@ -174,15 +184,17 @@ def main():
 
     # 2. the detail levels we decided not to draw are really not drawn
     hidden = set(re.findall(r"Instance=(\S+)\s*\{[^}]*LODOut=\(0\.01\)", scene))
-    want_hidden = {m["mesh"] for m in data["meshes"] if m.get("lod_of")}
-    want_hidden |= {m["mesh"] for m in data["meshes"] if not m.get("render", True)}
     # Only meshes that were exported at all can be drawn; one that is neither
-    # drawn nor collidable is now left out of the export entirely.
+    # drawn nor collidable is now left out of the export entirely. Each file
+    # the export wrote is judged against its own mesh's row, under the name
+    # the scene gives it (the gmt's).
     rec_path = os.path.join(out_dir, "gmt", "exported.json")
-    shipped = ({r.get("mesh") for r in json.load(open(rec_path))}
-               if os.path.exists(rec_path) else set(want_hidden))
-    still_drawn = [n for n in want_hidden if n in shipped
-                   and re.sub(r"[^A-Za-z0-9_]", "_", n) not in hidden]
+    want_hidden = []
+    for rec in (json.load(open(rec_path)) if os.path.exists(rec_path) else []):
+        row = row_of(rec)
+        if row is not None and (row.get("lod_of") or not row.get("render", True)):
+            want_hidden.append(os.path.splitext(rec["gmt"])[0])
+    still_drawn = [n for n in want_hidden if n not in hidden]
     if still_drawn:
         problems.append("meant to be hidden but still drawn: %d, e.g. %s"
                         % (len(still_drawn), still_drawn[:4]))
@@ -209,7 +221,7 @@ def main():
     exported = {}
     rec = os.path.join(out_dir, "gmt", "exported.json")
     if os.path.exists(rec):
-        exported = {r["gmt"]: r.get("mesh") for r in json.load(open(rec))}
+        exported = {r["gmt"]: r for r in json.load(open(rec))}
     else:
         # Say so rather than quietly checking nothing and reporting no faults,
         # which is the failure this whole script exists to stop.
@@ -219,8 +231,7 @@ def main():
     checked = wrong = 0
     examples = []
     for fname, g in refs.items():
-        mesh = exported.get(fname)
-        row = rows.get(mesh) if mesh else None
+        row = row_of(exported.get(fname))
         if row is None or row["rf2_material"] not in cutout:
             continue
         t = row.get("baked") or row["textures"].get("txDiffuse")
@@ -243,8 +254,7 @@ def main():
     #    the cut-out draws whole, which is the bug this check exists for.
     unkeyed = []
     for fname, g in refs.items():
-        mesh = exported.get(fname)
-        row = rows.get(mesh) if mesh else None
+        row = row_of(exported.get(fname))
         if row is None or row["rf2_material"] not in cutout:
             continue
         t = row.get("baked") or row["textures"].get("txDiffuse")
@@ -262,8 +272,7 @@ def main():
     # 5. a cut-out on a shader that cannot test alpha draws as a solid quad
     blind = []
     for fname, g in refs.items():
-        mesh = exported.get(fname)
-        row = rows.get(mesh) if mesh else None
+        row = row_of(exported.get(fname))
         if (row is not None and row["rf2_material"] in cutout
                 and g["shader"] in NO_ALPHA_TEST):
             blind.append("%s on %s" % (fname, g["shader"]))
@@ -279,8 +288,7 @@ def main():
     #    that fault coming back.
     sky_lit, walls = [], 0
     for fname, g in refs.items():
-        mesh = exported.get(fname)
-        row = rows.get(mesh) if mesh else None
+        row = row_of(exported.get(fname))
         if (row is None or float(row.get("upward", 1.0)) > 0.1
                 or float(row.get("ac_normals_up", 0.0)) > 0.5
                 or row.get("shader") in ("ksTree", "ksGrass")

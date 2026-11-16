@@ -690,7 +690,10 @@ def build(track_dir, out_path, layout):
     # else (an extracted zip) lost AC's global surfaces.ini that way.
     import steam_paths
     surf = convert_track.load_surfaces(layout_root, steam_paths.AC_DIR)
-    valid = {key.upper() for key, info in surf.items() if info["valid"]}
+    # As mesh names carry them: without the digit some tracks write into the
+    # key (convert_track.key_stem).
+    valid = {convert_track.key_stem(key) for key, info in surf.items()
+             if info["valid"]} - {""}
     print("drivable surface keys: %s" % ", ".join(sorted(valid)))
     starts, pits, road, solid = [], [], [], []
     for path in paths:
